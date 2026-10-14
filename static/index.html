@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Convertidor de artículos</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <main class="page">
+    <section class="hero">
+      <p class="eyebrow">Procesamiento de inventario</p>
+      <h1>Convertidor de artículos</h1>
+      <p class="lead">Carga un archivo Excel o CSV. El sistema busca cada referencia en el catálogo interno, actualiza el ID y el nombre, y genera CSV (o ZIP si hay varias hojas).</p>
+    </section>
+
+    <section class="card">
+      <div id="dropZone" class="drop-zone" tabindex="0">
+        <input id="fileInput" type="file" accept=".xlsx,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv" hidden>
+        <p class="drop-title">Selecciona o arrastra un archivo Excel o CSV</p>
+        <p class="drop-help">Se aceptan .xlsx y .csv. El archivo original no se modifica. La salida es CSV/ZIP.</p>
+        <button id="selectButton" class="button secondary" type="button">Seleccionar archivo</button>
+        <p id="fileName" class="file-name" aria-live="polite"></p>
+      </div>
+
+      <div class="rules">
+        <h2>Reglas aplicadas</h2>
+        <ol>
+          <li>Busca cada valor de <strong>ID INTERNO ARTICULO</strong> contra el catálogo interno (<strong>Ref</strong>).</li>
+          <li>Reemplaza por <strong>ID interno</strong> y actualiza <strong>NOMBRE DE ARTICULO</strong>.</li>
+          <li>Si una referencia no existe, la fila se conserva y se reporta.</li>
+          <li>La pestaña <strong>Lista</strong>, si aparece en un Excel, se ignora y no modifica el catálogo.</li>
+        </ol>
+      </div>
+
+      <button id="processButton" class="button primary" type="button" disabled>Procesar archivo</button>
+      <p id="status" class="status" aria-live="polite"></p>
+    </section>
+
+    <section id="resultCard" class="card result hidden">
+      <div class="result-header">
+        <div>
+          <p class="eyebrow">Resultado</p>
+          <h2>Archivo generado</h2>
+          <p id="outputFiles" class="output-files"></p>
+        </div>
+        <a id="downloadButton" class="button primary" href="#">Descargar resultado</a>
+      </div>
+
+      <div class="metrics">
+        <div class="metric"><span id="recordsCount">0</span><small>registros procesados</small></div>
+        <div class="metric"><span id="processedCount">0</span><small>artículos transformados</small></div>
+        <div class="metric"><span id="missingCount">0</span><small>referencias no encontradas</small></div>
+        <div class="metric file-metric"><span id="generatedFile" class="file-metric-value">—</span><small>archivo generado</small></div>
+      </div>
+
+      <div id="issuesSection" class="issues hidden">
+        <h3>Referencias no encontradas</h3>
+        <p>Estas filas se dejaron sin modificar para evitar reemplazos incorrectos.</p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Origen</th><th>Fila</th><th>Valor</th></tr></thead>
+            <tbody id="issuesBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section class="card catalog-card">
+      <div class="catalog-header">
+        <div>
+          <p class="eyebrow">Catálogo de artículos</p>
+          <h2>Catálogo de artículos</h2>
+          <p class="catalog-total">Total de artículos: <strong id="catalogTotal">0</strong></p>
+        </div>
+        <button id="toggleCatalogButton" class="button secondary" type="button">Administrar catálogo</button>
+      </div>
+
+      <div id="catalogPanel" class="catalog-panel hidden">
+        <form id="catalogForm" class="catalog-form">
+          <h3>Agregar artículo</h3>
+          <div class="form-grid">
+            <label>ID interno
+              <input id="newInternalId" name="internal_id" type="text" required autocomplete="off">
+            </label>
+            <label>Ref
+              <input id="newRef" name="ref" type="text" required autocomplete="off">
+            </label>
+            <label class="full">Nombre
+              <input id="newName" name="name" type="text" required autocomplete="off">
+            </label>
+          </div>
+          <button class="button primary" type="submit">Agregar artículo</button>
+          <p id="catalogFormStatus" class="status" aria-live="polite"></p>
+        </form>
+
+        <div class="catalog-list">
+          <div class="catalog-toolbar">
+            <label class="search-label">Buscar artículo
+              <input id="catalogSearch" type="search" placeholder="Ref, ID interno o nombre">
+            </label>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Ref</th>
+                  <th>ID interno</th>
+                  <th>Nombre</th>
+                </tr>
+              </thead>
+              <tbody id="catalogBody"></tbody>
+            </table>
+          </div>
+          <div class="pager">
+            <button id="catalogPrev" class="button secondary" type="button">Anterior</button>
+            <span id="catalogPageInfo">Página 1</span>
+            <button id="catalogNext" class="button secondary" type="button">Siguiente</button>
+          </div>
+          <p id="catalogListStatus" class="status" aria-live="polite"></p>
+        </div>
+      </div>
+    </section>
+
+    <p class="privacy">El procesamiento se ejecuta en este equipo. Este MVP no envía archivos a servicios externos.</p>
+  </main>
+  <script src="/app.js"></script>
+</body>
+</html>
