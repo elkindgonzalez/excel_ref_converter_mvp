@@ -1,9 +1,15 @@
 __pycache__/
 *.pyc
 *.xlsx
+!tests/fixtures/**/*.xlsx
 test_fixtures/
 data/backups/
+data/*.tmp
+*.tmp
 .DS_Store
 *.zip
 .env
 .env.*
+.pytest_cache/
+.coverage
+htmlcov/

@@ -11,74 +11,168 @@
     <section class="hero">
       <p class="eyebrow">Procesamiento de inventario</p>
       <h1>Convertidor de artículos</h1>
-      <p class="lead">Carga un archivo Excel o CSV. El sistema busca cada referencia en el catálogo interno, actualiza el ID y el nombre, y genera CSV (o ZIP si hay varias hojas).</p>
+      <p class="lead">Convierte referencias comerciales a IDs internos y actualiza el catálogo maestro desde exportaciones de inventario.</p>
     </section>
 
-    <section class="card">
-      <div id="dropZone" class="drop-zone" tabindex="0">
-        <input id="fileInput" type="file" accept=".xlsx,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv" hidden>
-        <p class="drop-title">Selecciona o arrastra un archivo Excel o CSV</p>
-        <p class="drop-help">Se aceptan .xlsx y .csv. El archivo original no se modifica. La salida es CSV/ZIP.</p>
-        <button id="selectButton" class="button secondary" type="button">Seleccionar archivo</button>
-        <p id="fileName" class="file-name" aria-live="polite"></p>
-      </div>
+    <nav class="tabs" role="tablist" aria-label="Funciones">
+      <button id="tabConvert" class="tab active" type="button" role="tab" aria-selected="true">Conversión de archivos</button>
+      <button id="tabCatalog" class="tab" type="button" role="tab" aria-selected="false">Catálogo de artículos</button>
+    </nav>
 
-      <div class="rules">
-        <h2>Reglas aplicadas</h2>
-        <ol>
-          <li>Busca cada valor de <strong>ID INTERNO ARTICULO</strong> contra el catálogo interno (<strong>Ref</strong>).</li>
-          <li>Reemplaza por <strong>ID interno</strong> y actualiza <strong>NOMBRE DE ARTICULO</strong>.</li>
-          <li>Si una referencia no existe, la fila se conserva y se reporta.</li>
-          <li>La pestaña <strong>Lista</strong>, si aparece en un Excel, se ignora y no modifica el catálogo.</li>
-        </ol>
-      </div>
-
-      <button id="processButton" class="button primary" type="button" disabled>Procesar archivo</button>
-      <p id="status" class="status" aria-live="polite"></p>
-    </section>
-
-    <section id="resultCard" class="card result hidden">
-      <div class="result-header">
-        <div>
-          <p class="eyebrow">Resultado</p>
-          <h2>Archivo generado</h2>
-          <p id="outputFiles" class="output-files"></p>
+    <section id="panelConvert" class="panel">
+      <section class="card">
+        <div id="dropZone" class="drop-zone" tabindex="0">
+          <input id="fileInput" type="file" accept=".xlsx,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv" hidden>
+          <p class="drop-title">Selecciona o arrastra un archivo Excel o CSV</p>
+          <p class="drop-help">Se aceptan .xlsx y .csv. El archivo original no se modifica. La salida es CSV/ZIP.</p>
+          <button id="selectButton" class="button secondary" type="button">Seleccionar archivo</button>
+          <p id="fileName" class="file-name" aria-live="polite"></p>
         </div>
-        <a id="downloadButton" class="button primary" href="#">Descargar resultado</a>
-      </div>
 
-      <div class="metrics">
-        <div class="metric"><span id="recordsCount">0</span><small>registros procesados</small></div>
-        <div class="metric"><span id="processedCount">0</span><small>artículos transformados</small></div>
-        <div class="metric"><span id="missingCount">0</span><small>referencias no encontradas</small></div>
-        <div class="metric file-metric"><span id="generatedFile" class="file-metric-value">—</span><small>archivo generado</small></div>
-      </div>
+        <div class="rules">
+          <h2>Reglas aplicadas</h2>
+          <ol>
+            <li>Lee la referencia comercial desde <strong>ID INTERNO ARTICULO</strong>.</li>
+            <li>Busca coincidencia exacta en el campo <strong>Ref</strong> del catálogo.</li>
+            <li>Reemplaza por <strong>ID interno</strong> y completa <strong>NOMBRE DE ARTICULO</strong>.</li>
+            <li>Si no hay coincidencia, conserva la fila y la reporta.</li>
+          </ol>
+        </div>
 
-      <div id="issuesSection" class="issues hidden">
-        <h3>Referencias no encontradas</h3>
-        <p>Estas filas se dejaron sin modificar para evitar reemplazos incorrectos.</p>
+        <button id="processButton" class="button primary" type="button" disabled>Procesar archivo</button>
+        <p id="status" class="status" aria-live="polite"></p>
+      </section>
+
+      <section id="resultCard" class="card result hidden">
+        <div class="result-header">
+          <div>
+            <p class="eyebrow">Resultado</p>
+            <h2>Archivo generado</h2>
+            <p id="outputFiles" class="output-files"></p>
+          </div>
+          <div class="result-actions">
+            <a id="downloadButton" class="button primary" href="#">Descargar resultado</a>
+            <a id="issuesDownloadButton" class="button secondary hidden" href="#">Descargar inconsistencias</a>
+          </div>
+        </div>
+
+        <div class="metrics">
+          <div class="metric"><span id="recordsCount">0</span><small>registros recibidos</small></div>
+          <div class="metric"><span id="processedCount">0</span><small>convertidos</small></div>
+          <div class="metric"><span id="missingCount">0</span><small>no encontradas</small></div>
+          <div class="metric"><span id="blankCount">0</span><small>sin referencia</small></div>
+          <div class="metric"><span id="errorCount">0</span><small>con errores</small></div>
+          <div class="metric"><span id="conversionPct">0%</span><small>conversión elegible</small></div>
+        </div>
+
+        <div id="issuesSection" class="issues hidden">
+          <h3>Inconsistencias</h3>
+          <p>Estas filas se dejaron sin modificar para evitar reemplazos incorrectos.</p>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Origen</th><th>Fila</th><th>Valor</th><th>Motivo</th></tr></thead>
+              <tbody id="issuesBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+    </section>
+
+    <section id="panelCatalog" class="panel hidden">
+      <section class="card">
+        <div class="catalog-header">
+          <div>
+            <p class="eyebrow">Catálogo maestro</p>
+            <h2>Artículos</h2>
+            <p class="catalog-total">Total: <strong id="catalogTotal">0</strong></p>
+          </div>
+        </div>
+
+        <div class="catalog-toolbar">
+          <label class="search-label">Buscar
+            <input id="catalogSearch" type="search" placeholder="Ref, ID interno o nombre">
+          </label>
+        </div>
         <div class="table-wrap">
           <table>
-            <thead><tr><th>Origen</th><th>Fila</th><th>Valor</th></tr></thead>
-            <tbody id="issuesBody"></tbody>
+            <thead>
+              <tr>
+                <th>Ref</th>
+                <th>ID interno</th>
+                <th>Nombre</th>
+              </tr>
+            </thead>
+            <tbody id="catalogBody"></tbody>
           </table>
         </div>
-      </div>
-    </section>
-
-    <section class="card catalog-card">
-      <div class="catalog-header">
-        <div>
-          <p class="eyebrow">Catálogo de artículos</p>
-          <h2>Catálogo de artículos</h2>
-          <p class="catalog-total">Total de artículos: <strong id="catalogTotal">0</strong></p>
+        <div class="pager">
+          <button id="catalogPrev" class="button secondary" type="button">Anterior</button>
+          <span id="catalogPageInfo">Página 1</span>
+          <button id="catalogNext" class="button secondary" type="button">Siguiente</button>
         </div>
-        <button id="toggleCatalogButton" class="button secondary" type="button">Administrar catálogo</button>
-      </div>
+        <p id="catalogListStatus" class="status" aria-live="polite"></p>
+      </section>
 
-      <div id="catalogPanel" class="catalog-panel hidden">
+      <section class="card">
+        <h2>Actualizar catálogo de artículos</h2>
+        <p class="muted">Carga un Excel/CSV exportado del inventario. La actualización es acumulativa: no elimina artículos existentes.</p>
+
+        <div id="importDropZone" class="drop-zone compact" tabindex="0">
+          <input id="importFileInput" type="file" accept=".xlsx,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv" hidden>
+          <p class="drop-title">Archivo de inventario</p>
+          <p class="drop-help">Columnas: ID interno, Nombre, Nombre para mostrar.</p>
+          <button id="importSelectButton" class="button secondary" type="button">Seleccionar inventario</button>
+          <p id="importFileName" class="file-name" aria-live="polite"></p>
+        </div>
+
+        <div class="admin-token-row">
+          <label class="search-label">Token admin (si aplica)
+            <input id="adminToken" type="password" autocomplete="off" placeholder="Solo si CATALOG_ADMIN_TOKEN está configurado">
+          </label>
+        </div>
+
+        <div class="actions-row">
+          <button id="importPreviewButton" class="button primary" type="button" disabled>Vista previa</button>
+          <button id="importConfirmButton" class="button secondary" type="button" disabled>Confirmar actualización</button>
+          <a id="importErrorsButton" class="button secondary hidden" href="#">Descargar errores</a>
+        </div>
+        <p id="importStatus" class="status" aria-live="polite"></p>
+
+        <div id="importPreviewCard" class="import-preview hidden">
+          <div class="metrics">
+            <div class="metric"><span id="importAnalyzed">0</span><small>filas analizadas</small></div>
+            <div class="metric"><span id="importNew">0</span><small>nuevos</small></div>
+            <div class="metric"><span id="importUpdate">0</span><small>a actualizar</small></div>
+            <div class="metric"><span id="importUnchanged">0</span><small>sin cambios</small></div>
+            <div class="metric"><span id="importConflicts">0</span><small>conflictos</small></div>
+            <div class="metric"><span id="importInvalid">0</span><small>inválidos</small></div>
+          </div>
+
+          <div id="importSamplesSection" class="issues hidden">
+            <h3>Ejemplos de cambios</h3>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Tipo</th><th>ID</th><th>Antes</th><th>Después</th></tr></thead>
+                <tbody id="importSamplesBody"></tbody>
+              </table>
+            </div>
+          </div>
+
+          <div id="importConflictsSection" class="issues hidden">
+            <h3>Conflictos / inválidos</h3>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Origen</th><th>Fila</th><th>ID</th><th>Ref</th><th>Motivo</th></tr></thead>
+                <tbody id="importConflictsBody"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Agregar artículo manual</h2>
         <form id="catalogForm" class="catalog-form">
-          <h3>Agregar artículo</h3>
           <div class="form-grid">
             <label>ID interno
               <input id="newInternalId" name="internal_id" type="text" required autocomplete="off">
@@ -93,33 +187,7 @@
           <button class="button primary" type="submit">Agregar artículo</button>
           <p id="catalogFormStatus" class="status" aria-live="polite"></p>
         </form>
-
-        <div class="catalog-list">
-          <div class="catalog-toolbar">
-            <label class="search-label">Buscar artículo
-              <input id="catalogSearch" type="search" placeholder="Ref, ID interno o nombre">
-            </label>
-          </div>
-          <div class="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Ref</th>
-                  <th>ID interno</th>
-                  <th>Nombre</th>
-                </tr>
-              </thead>
-              <tbody id="catalogBody"></tbody>
-            </table>
-          </div>
-          <div class="pager">
-            <button id="catalogPrev" class="button secondary" type="button">Anterior</button>
-            <span id="catalogPageInfo">Página 1</span>
-            <button id="catalogNext" class="button secondary" type="button">Siguiente</button>
-          </div>
-          <p id="catalogListStatus" class="status" aria-live="polite"></p>
-        </div>
-      </div>
+      </section>
     </section>
 
     <p class="privacy">El procesamiento se ejecuta en este equipo. Este MVP no envía archivos a servicios externos.</p>
