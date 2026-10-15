@@ -12,6 +12,7 @@ data/*.tmp
 data/catalogo_articulos.csv
 data/catalog_meta.json
 !data/catalogo_articulos.seed.csv
+!data/catalogo_articulos.seed.meta.json
 *.tmp
 .DS_Store
 *.zip

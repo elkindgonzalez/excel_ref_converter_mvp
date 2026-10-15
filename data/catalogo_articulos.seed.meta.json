@@ -1,0 +1,30 @@
+{
+  "file": "data/catalogo_articulos.seed.csv",
+  "article_count": 20175,
+  "prepared_at": "2026-10-15T17:49:16-05:00",
+  "sha256": "3bdce9a653486b7d9de13a129a77b6d01ff250973cbfb473a5ec6c23435ef73b",
+  "source": {
+    "inventory_file": "Artículos668.xlsx",
+    "inventory_path_note": "Importado desde el Excel de inventario del usuario (Downloads) sobre la base del catálogo vivo local; el vivo no se modificó.",
+    "base_live_articles": 1641,
+    "applied_new": 18534,
+    "applied_update": 21,
+    "conflicts_skipped_in_inventory": 174,
+    "invalid": 0
+  },
+  "integrity": {
+    "incomplete_rows": 0,
+    "duplicate_internal_ids": 0,
+    "conflicting_refs": 0,
+    "fields": [
+      "ID interno",
+      "Nombre",
+      "Ref"
+    ]
+  },
+  "bootstrap": {
+    "used_by": "app.ensure_catalog_file()",
+    "rule": "Copia el seed a catalogo_articulos.csv solo si el catálogo vivo no existe. Nunca sobrescribe un catálogo existente.",
+    "installer": "iniciar_windows.bat / iniciar_windows.ps1 / python app.py — sin rutas alternativas de catálogo."
+  }
+}

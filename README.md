@@ -67,7 +67,7 @@ Detalle: `docs/plantilla-compras.md`.
 - Alta manual.
 - **Actualizar catálogo**: vista previa → confirmación, acumulativa (nunca reemplazo total), con respaldos y detección de conflictos.
 
-Archivo maestro persistente: `$CATALOG_DATA_DIR/catalogo_articulos.csv` (por defecto `data/` en desarrollo). El seed versionado es `data/catalogo_articulos.seed.csv` y **nunca** sobrescribe un catálogo existente.
+Archivo maestro persistente: `$CATALOG_DATA_DIR/catalogo_articulos.csv` (por defecto `data/` en desarrollo). El seed versionado es `data/catalogo_articulos.seed.csv` (metadatos en `data/catalogo_articulos.seed.meta.json`) y **nunca** sobrescribe un catálogo existente. Es la única fuente de bootstrap en instalaciones nuevas (`python app.py` / scripts Windows).
 
 Migración y volumen en producción: `docs/persistencia-catalogo.md`.
 

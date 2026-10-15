@@ -18,7 +18,8 @@ La importación acumulativa, respaldos y escritura atómica ya cubren el requisi
 | `$CATALOG_DATA_DIR/catalogo_articulos.csv` | Catálogo **vivo** (permanente) |
 | `$CATALOG_DATA_DIR/catalog_meta.json` | Fecha de última actualización y conteo |
 | `$CATALOG_DATA_DIR/backups/` | Respaldos automáticos (máx. 20) |
-| `data/catalogo_articulos.seed.csv` (en el repo) | Solo bootstrap si el vivo **no existe** |
+| `data/catalogo_articulos.seed.csv` (en el repo) | Única fuente de bootstrap si el vivo **no existe** |
+| `data/catalogo_articulos.seed.meta.json` (en el repo) | Conteo, fecha de preparación y SHA-256 del seed |
 | `data/catalogo_articulos.csv` (legado local) | Se migra una vez al `CATALOG_DATA_DIR` si el destino está vacío |
 
 **Regla de oro:** si el catálogo vivo ya existe, **nunca** se reemplaza con el seed del repositorio (ni en reinicio ni en despliegue).
@@ -89,7 +90,8 @@ El código se actualiza con la imagen; el volumen conserva el CSV.
 ## Qué no hace Git
 
 - `data/catalogo_articulos.csv` y `data/catalog_meta.json` están en `.gitignore`.
-- Solo se versiona `data/catalogo_articulos.seed.csv` como plantilla inicial vacía/demo.
+- Se versionan `data/catalogo_articulos.seed.csv` (catálogo maestro para instalaciones nuevas) y `data/catalogo_articulos.seed.meta.json` (conteo, fecha, SHA-256).
+- Los instaladores (`iniciar_windows.bat`, `iniciar_windows.ps1`, `python app.py`) no usan otra ruta de catálogo: el bootstrap es solo vía seed.
 - Un `git pull` **no** debe borrar el volumen de producción (está fuera del repo).
 
 ## API de estado
