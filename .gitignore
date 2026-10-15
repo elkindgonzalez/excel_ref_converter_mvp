@@ -1,10 +1,17 @@
 __pycache__/
+.venv/
+venv/
 *.pyc
 *.xlsx
 !tests/fixtures/**/*.xlsx
 test_fixtures/
 data/backups/
 data/*.tmp
+# Catálogo vivo y metadatos: no versionar (evita sobrescritura en despliegues).
+# El bootstrap versionado es data/catalogo_articulos.seed.csv
+data/catalogo_articulos.csv
+data/catalog_meta.json
+!data/catalogo_articulos.seed.csv
 *.tmp
 .DS_Store
 *.zip

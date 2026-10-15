@@ -50,6 +50,10 @@ Opcionales: `NOTA`, `NOMBRE DE ARTICULO`, `CENTRO DE COSTOS`, `SUBCENTRO DE COST
 - Si el código es Ref de un artículo e ID de otro → ambigüedad; el usuario debe elegir.
 - Prefijos parciales no se convierten solos (solo sugieren); la resolución ocurre con Enter, Tab o al salir del campo.
 
+## Abrir un CSV ya generado
+
+El módulo **Crear archivo** puede reabrir un CSV exportado previamente (misma plantilla). Los IDs internos se reconocen contra el catálogo; si un ID ya no existe, se conserva con advertencia. La descarga editada propone el sufijo `_editado.csv` y no sobrescribe el archivo de origen.
+
 ## Nota sobre el flujo anterior
 
 En el archivo de prueba original, `ID INTERNO ARTICULO` contenía la **referencia comercial** y `NOMBRE DE ARTICULO` venía vacío. El módulo **Crear archivo** acepta la Ref en el formulario, la convierte al ID interno real y rellena el nombre del catálogo en la exportación.

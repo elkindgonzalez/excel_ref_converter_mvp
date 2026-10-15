@@ -48,6 +48,7 @@ class PurchaseFormTests(unittest.TestCase):
             mock.patch.object(app, "CATALOG_PATH", self.catalog_path),
             mock.patch.object(app, "BACKUP_DIR", self.backup_dir),
             mock.patch.object(app, "DATA_DIR", self.tmp),
+            mock.patch.object(app, "CATALOG_META_PATH", self.tmp / "catalog_meta.json"),
         ]
         for p in self.patches:
             p.start()

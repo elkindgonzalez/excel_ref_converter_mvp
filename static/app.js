@@ -10,6 +10,10 @@ const purchaseBody = document.getElementById('purchaseBody');
 const purchaseCols = document.getElementById('purchaseCols');
 const purchaseTable = document.getElementById('purchaseTable');
 const purchaseScroll = document.getElementById('purchaseScroll');
+const newFileButton = document.getElementById('newFileButton');
+const openCsvButton = document.getElementById('openCsvButton');
+const openCsvInput = document.getElementById('openCsvInput');
+const openFileInfo = document.getElementById('openFileInfo');
 const addRowButton = document.getElementById('addRowButton');
 const fillDownButton = document.getElementById('fillDownButton');
 const resetWidthsButton = document.getElementById('resetWidthsButton');
@@ -24,6 +28,7 @@ const csvPreviewBody = document.getElementById('csvPreviewBody');
 const csvPreviewStatus = document.getElementById('csvPreviewStatus');
 
 const catalogTotal = document.getElementById('catalogTotal');
+const catalogUpdatedAt = document.getElementById('catalogUpdatedAt');
 const catalogForm = document.getElementById('catalogForm');
 const catalogFormStatus = document.getElementById('catalogFormStatus');
 const catalogSearch = document.getElementById('catalogSearch');
@@ -54,6 +59,9 @@ let searchTimer = null;
 let suggestTimers = new Map();
 let importToken = null;
 let selectedImportFile = null;
+/** Original CSV name when editing an opened file (client-only; never written to disk by the server). */
+let openedCsvName = null;
+let formDirty = false;
 
 let columnWidths = {};
 let visibleCols = [];
@@ -65,6 +73,32 @@ let draftByCell = new Map();
 
 const ACTIONS_PX = 78;
 
+function markDirty() {
+  formDirty = true;
+}
+
+function clearDirty() {
+  formDirty = false;
+}
+
+function confirmDiscardIfDirty(actionLabel) {
+  if (!formDirty) return true;
+  return window.confirm(
+    `Hay cambios sin descargar. ¿${actionLabel || 'Continuar'} y descartar los cambios?`,
+  );
+}
+
+function updateOpenFileInfo(filename, rowCount) {
+  if (!openFileInfo) return;
+  if (!filename) {
+    openFileInfo.hidden = true;
+    openFileInfo.textContent = '';
+    return;
+  }
+  openFileInfo.hidden = false;
+  openFileInfo.textContent = `Archivo abierto: ${filename} · ${rowCount} registro(s)`;
+}
+
 function adminHeaders(extra = {}) {
   const headers = { ...extra };
   const token = (adminToken.value || '').trim();
@@ -72,8 +106,30 @@ function adminHeaders(extra = {}) {
   return headers;
 }
 
-function updateCatalogTotal(total) {
+function formatCatalogUpdatedAt(iso) {
+  if (!iso || typeof iso !== 'string') return '—';
+  const trimmed = iso.trim();
+  if (!trimmed) return '—';
+  const parsed = new Date(trimmed);
+  if (Number.isNaN(parsed.getTime())) return trimmed;
+  try {
+    return parsed.toLocaleString('es-CO', {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  } catch (_) {
+    return trimmed;
+  }
+}
+
+function updateCatalogTotal(total, updatedAt) {
   if (typeof total === 'number') catalogTotal.textContent = String(total);
+  if (catalogUpdatedAt && updatedAt !== undefined) {
+    catalogUpdatedAt.textContent = formatCatalogUpdatedAt(updatedAt);
+  }
 }
 
 function setActiveTab(which) {
@@ -269,6 +325,7 @@ function buildRowElement(row, index) {
     if (!rows.length) rows.push(makeEmptyRow());
     if (active.rowIndex >= rows.length) active.rowIndex = rows.length - 1;
     selectionEndRow = null;
+    markDirty();
     renderRows();
     setStatus('');
     createErrors.classList.add('hidden');
@@ -312,6 +369,7 @@ function buildCell(row, index, col) {
           ...rows[index],
           data: { ...rows[index].data, [col]: input.value },
         };
+        markDirty();
       },
     });
     td.appendChild(input);
@@ -332,6 +390,7 @@ function buildCell(row, index, col) {
         return;
       }
       rows = result.rows;
+      markDirty();
       renderRows({ focus: { rowIndex: index, colKey: col } });
       setStatus('Valor copiado desde la fila anterior.');
     });
@@ -402,6 +461,7 @@ function buildDateCell(row, index, col) {
       ...rows[index],
       data: { ...rows[index].data, [col]: nextValue },
     };
+    markDirty();
     input.value = nextValue;
     picker.value = Ops.purchaseDateToIso(nextValue);
     // En blur: solo marcar error si hay texto y no es fecha válida completa.
@@ -425,6 +485,7 @@ function buildDateCell(row, index, col) {
       ...rows[index],
       data: { ...rows[index].data, [col]: masked.value },
     };
+    markDirty();
     picker.value = Ops.purchaseDateToIso(masked.value);
     // Mientras se escribe (parcial), no gritar error; sí si ya hay 8 dígitos inválidos.
     const digits = Ops.dateDigitsOnly(masked.value);
@@ -525,6 +586,7 @@ function focusCell(rowIndex, colKey, { select = true } = {}) {
 function duplicateAt(index) {
   const result = Ops.duplicateRow(rows, index, nextRowId());
   rows = result.rows;
+  markDirty();
   active = { rowIndex: result.newIndex, colKey: firstEditableCol() };
   selectionEndRow = result.newIndex;
   renderRows({ focus: { rowIndex: result.newIndex, colKey: firstEditableCol() } });
@@ -571,6 +633,7 @@ function buildArticleIdCell(row, index) {
       input.classList.remove('invalid');
       const nameInput = trField(index, Ops.ARTICLE_NAME);
       if (nameInput) nameInput.value = '';
+      markDirty();
       scheduleSuggest(index, input, list);
     },
   });
@@ -598,6 +661,7 @@ function applyResolvedArticle(rowIndex, item, list) {
   rows[rowIndex] = Ops.applyArticle(rows[rowIndex], item);
   delete rows[rowIndex]._articleQuery;
   delete rows[rowIndex]._articleError;
+  markDirty();
   if (list) list.classList.add('hidden');
 }
 
@@ -841,6 +905,7 @@ function doFillDown() {
   } else {
     rows = Ops.fillDown(rows, active.colKey, from, to);
   }
+  markDirty();
   renderRows({ focus: { rowIndex: from, colKey: active.colKey } });
   setStatus('Valores rellenados hacia abajo.');
 }
@@ -917,6 +982,7 @@ function onPaste(event) {
       }
     }
     rows = next;
+    markDirty();
     renderRows({ focus: { rowIndex: active.rowIndex, colKey: active.colKey } });
     setStatus('Pegado aplicado.');
     return;
@@ -924,6 +990,7 @@ function onPaste(event) {
 
   const result = Ops.applyPaste(rows, active.rowIndex, active.colKey, grid, template.headers);
   rows = result.rows;
+  markDirty();
   // Ensure ids unique / seq
   rowSeq = rows.reduce((m, r) => Math.max(m, r.id), 0) + 1;
   renderRows({ focus: { rowIndex: active.rowIndex, colKey: active.colKey } });
@@ -960,13 +1027,196 @@ async function initTemplate() {
   if (!response.ok || !data.ok) throw new Error(data.error || 'No se pudo cargar la plantilla.');
   template = data;
   rows = [makeEmptyRow()];
+  openedCsvName = null;
+  updateOpenFileInfo(null, 0);
+  clearDirty();
   renderHead();
   distributeWidths();
   renderRows({ focus: { rowIndex: 0, colKey: Ops.ARTICLE_ID, select: false } });
 }
 
+function startNewFile() {
+  if (!confirmDiscardIfDirty('Crear un archivo nuevo')) return;
+  rows = [makeEmptyRow()];
+  rowSeq = 2;
+  openedCsvName = null;
+  updateOpenFileInfo(null, 0);
+  clearDirty();
+  createErrors.classList.add('hidden');
+  csvPreviewPanel.classList.add('hidden');
+  active = { rowIndex: 0, colKey: Ops.ARTICLE_ID };
+  selectionEndRow = 0;
+  renderRows({ focus: { rowIndex: 0, colKey: Ops.ARTICLE_ID, select: false } });
+  setStatus('Formulario vacío listo.');
+}
+
+async function resolveCodeCached(code, cache) {
+  const key = String(code || '').trim();
+  if (!key) return { status: 'empty', item: null, message: '' };
+  if (cache.has(key)) return cache.get(key);
+  const response = await fetch(`/api/catalog/resolve?q=${encodeURIComponent(key)}`);
+  const data = await response.json();
+  if (!response.ok || !data.ok) {
+    const fallback = { status: 'not_found', item: null, message: data.error || 'No se pudo consultar el catálogo.' };
+    cache.set(key, fallback);
+    return fallback;
+  }
+  cache.set(key, data);
+  return data;
+}
+
+/**
+ * After parsing a CSV locally, associate known internal IDs with the catalog.
+ * Never mutates the master catalog. Keeps unknown IDs and invalid dates with warnings.
+ */
+async function hydrateOpenedRows(gridRows) {
+  const warnings = [];
+  const cache = new Map();
+  for (let i = 0; i < gridRows.length; i += 1) {
+    const row = gridRows[i];
+    const code = (row.data[Ops.ARTICLE_ID] || '').trim();
+    const name = (row.data[Ops.ARTICLE_NAME] || '').trim();
+    if (code) {
+      const resolution = await resolveCodeCached(code, cache);
+      if (resolution.status === 'resolved' && resolution.item) {
+        const match = resolution.item.match || '';
+        if (match === 'id' || match === 'both') {
+          row.data[Ops.ARTICLE_ID] = String(resolution.item.internal_id || code);
+          if (!name || name === resolution.item.name) {
+            row.data[Ops.ARTICLE_NAME] = String(resolution.item.name || '');
+            row.selectedArticle = {
+              internal_id: String(resolution.item.internal_id || ''),
+              name: String(resolution.item.name || ''),
+              ref: String(resolution.item.ref || ''),
+            };
+          } else {
+            warnings.push({
+              row: i + 1,
+              field: Ops.ARTICLE_NAME,
+              message: `El nombre del archivo no coincide con el catálogo («${name}» ≠ «${resolution.item.name}»). Se conserva el del archivo.`,
+            });
+            row.selectedArticle = null;
+          }
+        } else if (match === 'ref') {
+          warnings.push({
+            row: i + 1,
+            field: Ops.ARTICLE_ID,
+            message: `«${code}» coincide con una Ref comercial, no con un ID interno. Conservado tal cual; resuelve el artículo antes de descargar.`,
+          });
+          row.selectedArticle = null;
+        }
+      } else if (resolution.status === 'ambiguous') {
+        warnings.push({
+          row: i + 1,
+          field: Ops.ARTICLE_ID,
+          message: resolution.message || 'Código ambiguo entre Ref e ID interno.',
+        });
+        row.selectedArticle = null;
+      } else if (resolution.status === 'not_found') {
+        warnings.push({
+          row: i + 1,
+          field: Ops.ARTICLE_ID,
+          message: `El ID interno «${code}» no existe en el catálogo actual. Se conserva el valor; corrígelo antes de descargar.`,
+        });
+        row.selectedArticle = null;
+      }
+    }
+    const dateValue = row.data['FECHA DE AJUSTE'] || '';
+    if (dateValue && !Ops.isValidPurchaseDate(dateValue)) {
+      warnings.push({
+        row: i + 1,
+        field: 'FECHA DE AJUSTE',
+        message: Ops.DATE_ERROR,
+      });
+    }
+  }
+  return warnings;
+}
+
+async function openPurchaseCsvFile(file) {
+  if (!file) return;
+  const lower = (file.name || '').toLowerCase();
+  if (!lower.endsWith('.csv')) {
+    setStatus('Selecciona un archivo .csv de la plantilla de compras.', 'error');
+    return;
+  }
+  if (file.size > Ops.MAX_OPEN_CSV_BYTES) {
+    setStatus(`El archivo supera el límite de ${(Ops.MAX_OPEN_CSV_BYTES / (1024 * 1024)).toFixed(0)} MB.`, 'error');
+    return;
+  }
+  setStatus('Leyendo CSV…');
+  let text;
+  try {
+    text = await file.text();
+  } catch (error) {
+    setStatus('No fue posible leer el archivo.', 'error');
+    return;
+  }
+  const parsed = Ops.parsePurchaseCsv(text, template.headers, {
+    delimiter: (template && template.delimiter) || ';',
+    maxRows: 5000,
+  });
+  if (!parsed.ok) {
+    const detail = (parsed.errors || []).map((e) => e.message).join(' ');
+    showErrorTable((parsed.errors || []).map((e, idx) => ({
+      row: e.row || '—',
+      field: e.type || 'encabezado',
+      message: e.message,
+    })));
+    setStatus(detail || 'El CSV no es compatible con la plantilla.', 'error');
+    return;
+  }
+  const gridRows = Ops.gridRowsFromCsvObjects(parsed.rows, template.headers, 1);
+  const warnings = await hydrateOpenedRows(gridRows);
+  rows = gridRows.length ? gridRows : [makeEmptyRow()];
+  rowSeq = rows.reduce((m, r) => Math.max(m, r.id), 0) + 1;
+  openedCsvName = file.name;
+  updateOpenFileInfo(openedCsvName, parsed.row_count);
+  clearDirty();
+  active = { rowIndex: 0, colKey: Ops.ARTICLE_ID };
+  selectionEndRow = 0;
+  renderRows({ focus: { rowIndex: 0, colKey: Ops.ARTICLE_ID, select: false } });
+  if (warnings.length || (parsed.warnings && parsed.warnings.length)) {
+    const all = [
+      ...(parsed.warnings || []).map((w) => ({
+        row: w.row || '—',
+        field: w.type || '',
+        message: w.message,
+      })),
+      ...warnings,
+    ];
+    showErrorTable(all);
+    setStatus(
+      `CSV abierto: ${parsed.row_count} registro(s) con ${all.length} advertencia(s). Puedes editar y descargar.`,
+      'warning',
+    );
+  } else {
+    createErrors.classList.add('hidden');
+    setStatus(`CSV abierto: ${parsed.row_count} registro(s) recuperados. Listo para editar.`, 'success');
+  }
+}
+
+newFileButton.addEventListener('click', () => startNewFile());
+openCsvButton.addEventListener('click', () => {
+  if (!confirmDiscardIfDirty('Abrir otro CSV')) return;
+  openCsvInput.value = '';
+  openCsvInput.click();
+});
+openCsvInput.addEventListener('change', async () => {
+  const file = openCsvInput.files && openCsvInput.files[0];
+  if (!file) return;
+  try {
+    await openPurchaseCsvFile(file);
+  } catch (error) {
+    setStatus(error.message || 'No fue posible abrir el CSV.', 'error');
+  } finally {
+    openCsvInput.value = '';
+  }
+});
+
 addRowButton.addEventListener('click', () => {
   rows.push(makeEmptyRow());
+  markDirty();
   active = { rowIndex: rows.length - 1, colKey: firstEditableCol() };
   selectionEndRow = active.rowIndex;
   renderRows({ focus: { rowIndex: active.rowIndex, colKey: active.colKey } });
@@ -1059,7 +1309,10 @@ downloadButton.addEventListener('click', async () => {
     const response = await fetch('/api/purchase/export', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ rows: collectRowsPayload() }),
+      body: JSON.stringify({
+        rows: collectRowsPayload(),
+        source_filename: openedCsvName || undefined,
+      }),
     });
     const data = await response.json();
     if (!response.ok || !data.ok) {
@@ -1074,6 +1327,7 @@ downloadButton.addEventListener('click', async () => {
     document.body.appendChild(link);
     link.click();
     link.remove();
+    clearDirty();
     setStatus(`CSV generado (${data.rows} fila(s)): ${data.filename}`, 'success');
   } catch (error) {
     setStatus(error.message, 'error');
@@ -1106,7 +1360,7 @@ async function loadCatalog() {
   const response = await fetch(`/api/catalog?${query}`);
   const data = await response.json();
   if (!response.ok || !data.ok) throw new Error(data.error || 'No fue posible cargar el catálogo.');
-  updateCatalogTotal(data.catalog_total);
+  updateCatalogTotal(data.catalog_total, data.catalog_updated_at);
   catalogTotalPages = data.total_pages || 1;
   catalogPageInfo.textContent = `Página ${data.page} de ${catalogTotalPages} · ${data.total} resultado(s)`;
   catalogPrev.disabled = data.page <= 1;
@@ -1163,7 +1417,7 @@ catalogForm.addEventListener('submit', async (event) => {
     });
     const data = await response.json();
     if (!response.ok || !data.ok) throw new Error(data.error || 'No fue posible agregar el artículo.');
-    updateCatalogTotal(data.catalog_total);
+    updateCatalogTotal(data.catalog_total, data.catalog_updated_at);
     catalogForm.reset();
     catalogFormStatus.textContent = data.message || 'Artículo agregado.';
     catalogFormStatus.className = 'status success';
@@ -1284,7 +1538,7 @@ importPreviewButton.addEventListener('click', async () => {
     const data = await response.json();
     if (!response.ok || !data.ok) throw new Error(data.error || 'No fue posible analizar el inventario.');
     importToken = data.token;
-    updateCatalogTotal(data.catalog_total);
+    updateCatalogTotal(data.catalog_total, data.catalog_updated_at);
     renderImportPreview(data);
     importConfirmButton.disabled = !data.apply_ready;
     if (data.errorsDownloadUrl && (data.conflict_count || data.invalid_count)) {
@@ -1316,7 +1570,7 @@ importConfirmButton.addEventListener('click', async () => {
     });
     const data = await response.json();
     if (!response.ok || !data.ok) throw new Error(data.error || 'No fue posible confirmar.');
-    updateCatalogTotal(data.catalog_total);
+    updateCatalogTotal(data.catalog_total, data.catalog_updated_at);
     importToken = null;
     importStatus.textContent =
       `${data.message} Nuevos: ${data.applied_new}. Actualizados: ${data.applied_update}.`
@@ -1332,7 +1586,7 @@ importConfirmButton.addEventListener('click', async () => {
 
 fetch('/api/health')
   .then((r) => r.json())
-  .then((data) => updateCatalogTotal(data.catalog_total || 0))
-  .catch(() => updateCatalogTotal(0));
+  .then((data) => updateCatalogTotal(data.catalog_total || 0, data.catalog_updated_at))
+  .catch(() => updateCatalogTotal(0, ''));
 
 initTemplate().catch((error) => setStatus(error.message, 'error'));

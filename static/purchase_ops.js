@@ -502,6 +502,251 @@
     return rows.map((row) => headers.map((h) => row.data[h] || ""));
   }
 
+  /** Max size for opening a purchase CSV in the browser (bytes). */
+  const MAX_OPEN_CSV_BYTES = 8 * 1024 * 1024;
+
+  /**
+   * RFC-style CSV record parser (delimiter-aware, quoted fields, embedded newlines).
+   * Does NOT use String.split(delimiter) on whole lines.
+   */
+  function parseCsvRecords(text, delimiter) {
+    const delim = delimiter == null ? ";" : delimiter;
+    let input = String(text == null ? "" : text);
+    if (input.charCodeAt(0) === 0xfeff) input = input.slice(1);
+    const records = [];
+    let row = [];
+    let field = "";
+    let i = 0;
+    let inQuotes = false;
+    while (i < input.length) {
+      const c = input[i];
+      if (inQuotes) {
+        if (c === '"') {
+          if (input[i + 1] === '"') {
+            field += '"';
+            i += 2;
+            continue;
+          }
+          inQuotes = false;
+          i += 1;
+          continue;
+        }
+        field += c;
+        i += 1;
+        continue;
+      }
+      if (c === '"') {
+        inQuotes = true;
+        i += 1;
+        continue;
+      }
+      if (c === delim) {
+        row.push(field);
+        field = "";
+        i += 1;
+        continue;
+      }
+      if (c === "\r") {
+        if (input[i + 1] === "\n") i += 1;
+        row.push(field);
+        records.push(row);
+        row = [];
+        field = "";
+        i += 1;
+        continue;
+      }
+      if (c === "\n") {
+        row.push(field);
+        records.push(row);
+        row = [];
+        field = "";
+        i += 1;
+        continue;
+      }
+      field += c;
+      i += 1;
+    }
+    if (inQuotes) {
+      return { ok: false, records: [], error: "CSV malformado: comillas sin cerrar." };
+    }
+    if (field.length > 0 || row.length > 0) {
+      row.push(field);
+      records.push(row);
+    }
+    // Drop a single trailing empty record produced by a final newline.
+    if (
+      records.length
+      && records[records.length - 1].length === 1
+      && records[records.length - 1][0] === ""
+    ) {
+      records.pop();
+    }
+    return { ok: true, records, error: "" };
+  }
+
+  function headersCompatible(actual, expected) {
+    const errors = [];
+    const exp = expected.slice();
+    const act = actual.slice();
+    if (act.length !== exp.length) {
+      errors.push({
+        type: "header_count",
+        message: `Se esperaban ${exp.length} columnas y el archivo tiene ${act.length}.`,
+        expected: exp,
+        actual: act,
+      });
+    }
+    const missing = exp.filter((h) => act.indexOf(h) === -1);
+    const unexpected = act.filter((h) => exp.indexOf(h) === -1);
+    if (missing.length) {
+      errors.push({
+        type: "header_missing",
+        message: `Faltan encabezados: ${missing.join(", ")}`,
+        missing,
+      });
+    }
+    if (unexpected.length) {
+      errors.push({
+        type: "header_unexpected",
+        message: `Encabezados no reconocidos: ${unexpected.join(", ")}`,
+        unexpected,
+      });
+    }
+    const seen = new Set();
+    const duplicates = [];
+    for (const h of act) {
+      if (seen.has(h)) duplicates.push(h);
+      seen.add(h);
+    }
+    if (duplicates.length) {
+      errors.push({
+        type: "header_duplicate",
+        message: `Encabezados duplicados: ${duplicates.join(", ")}`,
+        duplicates,
+      });
+    }
+    const orderMismatch = [];
+    const n = Math.min(act.length, exp.length);
+    for (let i = 0; i < n; i += 1) {
+      if (act[i] !== exp[i]) {
+        orderMismatch.push({ index: i + 1, expected: exp[i], actual: act[i] });
+      }
+    }
+    if (orderMismatch.length && !missing.length && !unexpected.length && act.length === exp.length) {
+      errors.push({
+        type: "header_order",
+        message: "El orden de las columnas no coincide con la plantilla.",
+        orderMismatch,
+      });
+    }
+    return { ok: errors.length === 0, errors };
+  }
+
+  /**
+   * Parse a purchase-template CSV text into row objects keyed by header.
+   * Preserves cell text as strings (no numeric coercion). Does not touch the catalog.
+   */
+  function parsePurchaseCsv(text, expectedHeaders, options) {
+    const opts = options || {};
+    const delimiter = opts.delimiter == null ? ";" : opts.delimiter;
+    const maxRows = opts.maxRows == null ? 5000 : opts.maxRows;
+    const parsed = parseCsvRecords(text, delimiter);
+    if (!parsed.ok) {
+      return {
+        ok: false,
+        headers: [],
+        rows: [],
+        errors: [{ type: "parse", message: parsed.error }],
+        warnings: [],
+        row_count: 0,
+      };
+    }
+    if (!parsed.records.length) {
+      return {
+        ok: false,
+        headers: [],
+        rows: [],
+        errors: [{ type: "empty", message: "El archivo CSV está vacío." }],
+        warnings: [],
+        row_count: 0,
+      };
+    }
+    const headers = parsed.records[0].map((h) => String(h == null ? "" : h));
+    const compat = headersCompatible(headers, expectedHeaders);
+    if (!compat.ok) {
+      return {
+        ok: false,
+        headers,
+        rows: [],
+        errors: compat.errors,
+        warnings: [],
+        row_count: 0,
+      };
+    }
+    const dataRecords = parsed.records.slice(1);
+    if (dataRecords.length > maxRows) {
+      return {
+        ok: false,
+        headers,
+        rows: [],
+        errors: [{
+          type: "too_many_rows",
+          message: `El archivo tiene ${dataRecords.length} filas; el máximo es ${maxRows}.`,
+        }],
+        warnings: [],
+        row_count: 0,
+      };
+    }
+    const warnings = [];
+    const rows = [];
+    for (let r = 0; r < dataRecords.length; r += 1) {
+      const record = dataRecords[r];
+      if (record.length !== headers.length) {
+        warnings.push({
+          type: "row_width",
+          row: r + 1,
+          message: `La fila ${r + 1} tiene ${record.length} campos; se esperaban ${headers.length}.`,
+        });
+      }
+      const data = {};
+      for (let c = 0; c < headers.length; c += 1) {
+        // Preserve as text; missing cells become empty string.
+        data[headers[c]] = record[c] == null ? "" : String(record[c]);
+      }
+      rows.push(data);
+    }
+    return {
+      ok: true,
+      headers,
+      rows,
+      errors: [],
+      warnings,
+      row_count: rows.length,
+    };
+  }
+
+  /** Build editable grid rows from parsed CSV objects. Keeps order; empty fields allowed. */
+  function gridRowsFromCsvObjects(objects, headers, startId) {
+    let nextId = startId || 1;
+    return objects.map((obj) => {
+      const row = emptyRow(headers, nextId);
+      nextId += 1;
+      for (const header of headers) {
+        row.data[header] = obj[header] == null ? "" : String(obj[header]);
+      }
+      return row;
+    });
+  }
+
+  function editedDownloadFilename(originalName) {
+    let base = String(originalName || "compras").trim() || "compras";
+    base = base.split(/[/\\]/).pop() || "compras";
+    if (/\.csv$/i.test(base)) base = base.slice(0, -4);
+    base = base.replace(/[^\w.\-áéíóúÁÉÍÓÚüÜñÑ ]+/g, "_").trim() || "compras";
+    if (base.length > 120) base = base.slice(0, 120);
+    return `${base}_editado.csv`;
+  }
+
   return {
     ARTICLE_ID,
     ARTICLE_NAME,
@@ -544,5 +789,11 @@
     rowIdsUnique,
     exportOrder,
     cloneArticle,
+    MAX_OPEN_CSV_BYTES,
+    parseCsvRecords,
+    headersCompatible,
+    parsePurchaseCsv,
+    gridRowsFromCsvObjects,
+    editedDownloadFilename,
   };
 });

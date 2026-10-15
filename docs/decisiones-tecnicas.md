@@ -40,7 +40,9 @@ Los encabezados, el delimitador `;`, UTF-8-BOM y CRLF se tomaron del archivo rea
 
 - Formulario: solo memoria del navegador (sesión).
 - CSV exportado: token en memoria del servidor con TTL; sin escritura permanente de compras.
-- Catálogo: CSV en `data/` con respaldos y escritura atómica.
+- Catálogo: CSV + `catalog_meta.json` en `CATALOG_DATA_DIR` (por defecto `data/`), con respaldos y escritura atómica.
+- Seed del repo (`catalogo_articulos.seed.csv`) solo inicializa si el vivo no existe; nunca lo reemplaza.
+- **Decisión MVP:** volumen/archivo persistente, no BD. Detalle: `docs/persistencia-catalogo.md`.
 
 ## Identidad e importación del catálogo
 

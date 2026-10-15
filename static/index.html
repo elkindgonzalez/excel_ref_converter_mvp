@@ -11,7 +11,7 @@
     <section class="hero">
       <p class="eyebrow">Inventario</p>
       <h1>Compras y catálogo</h1>
-      <p class="lead">Diligencia compras con copia inteligente y una tabla compacta. La única carga de archivos es para actualizar el catálogo.</p>
+      <p class="lead">Diligencia compras con copia inteligente y una tabla compacta. Puedes abrir un CSV ya generado para seguir editándolo.</p>
     </section>
 
     <nav class="tabs" role="tablist" aria-label="Funciones">
@@ -29,8 +29,12 @@
               <kbd>⇥</kbd> navegar · <kbd>⌘/Ctrl</kbd>+<kbd>C</kbd>/<kbd>V</kbd> ·
               <kbd>⌘/Ctrl</kbd>+<kbd>D</kbd> rellenar ↓
             </p>
+            <p id="openFileInfo" class="open-file-info muted" hidden></p>
           </div>
           <div class="toolbar-actions">
+            <button id="newFileButton" class="button secondary" type="button" title="Empezar un formulario vacío">Nuevo archivo</button>
+            <button id="openCsvButton" class="button secondary" type="button" title="Recuperar un CSV de la plantilla para editarlo">Abrir CSV existente</button>
+            <input id="openCsvInput" type="file" accept=".csv,text/csv" hidden>
             <button id="addRowButton" class="button secondary" type="button">Agregar fila</button>
             <button id="fillDownButton" class="button secondary" type="button" title="Rellenar hacia abajo desde la celda activa">Rellenar ↓</button>
             <button id="resetWidthsButton" class="button secondary" type="button" title="Restablecer anchos de columnas">Restablecer anchos</button>
@@ -78,7 +82,8 @@
           <div>
             <p class="eyebrow">Catálogo maestro</p>
             <h2>Artículos</h2>
-            <p class="catalog-total">Total: <strong id="catalogTotal">0</strong></p>
+            <p class="catalog-total">Artículos registrados: <strong id="catalogTotal">0</strong></p>
+            <p class="catalog-updated muted">Última actualización: <strong id="catalogUpdatedAt">—</strong></p>
           </div>
         </div>
 

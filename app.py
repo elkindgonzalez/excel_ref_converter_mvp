@@ -30,9 +30,10 @@ import xml.etree.ElementTree as ET
 
 APP_DIR = Path(__file__).resolve().parent
 STATIC_DIR = APP_DIR / "static"
-DATA_DIR = APP_DIR / "data"
-CATALOG_PATH = DATA_DIR / "catalogo_articulos.csv"
-BACKUP_DIR = DATA_DIR / "backups"
+# Persistencia del catálogo: fuera del árbol de código en producción vía CATALOG_DATA_DIR.
+CATALOG_DATA_DIR_ENV = "CATALOG_DATA_DIR"
+SEED_CATALOG_PATH = APP_DIR / "data" / "catalogo_articulos.seed.csv"
+LEGACY_CATALOG_PATH = APP_DIR / "data" / "catalogo_articulos.csv"
 HOST = "127.0.0.1"
 PORT = 8765
 MAX_FILE_SIZE = 50 * 1024 * 1024
@@ -44,6 +45,30 @@ MAX_CATALOG_BACKUPS = 20
 MAX_ZIP_UNCOMPRESSED = 200 * 1024 * 1024
 MAX_ZIP_ENTRIES = 5000
 PREVIEW_SAMPLE_LIMIT = 15
+
+
+def resolve_data_paths(
+    data_dir: Optional[str | Path] = None,
+) -> Tuple[Path, Path, Path, Path]:
+    """Return (DATA_DIR, CATALOG_PATH, BACKUP_DIR, CATALOG_META_PATH)."""
+    if data_dir is not None:
+        root = Path(data_dir).expanduser().resolve()
+    else:
+        configured = (os.environ.get(CATALOG_DATA_DIR_ENV) or "").strip()
+        root = Path(configured).expanduser().resolve() if configured else (APP_DIR / "data").resolve()
+    catalog = root / "catalogo_articulos.csv"
+    backups = root / "backups"
+    meta = root / "catalog_meta.json"
+    return root, catalog, backups, meta
+
+
+DATA_DIR, CATALOG_PATH, BACKUP_DIR, CATALOG_META_PATH = resolve_data_paths()
+
+
+def rebind_data_paths(data_dir: Optional[str | Path] = None) -> None:
+    """Rebind module paths (tests / late env). Does not migrate files."""
+    global DATA_DIR, CATALOG_PATH, BACKUP_DIR, CATALOG_META_PATH
+    DATA_DIR, CATALOG_PATH, BACKUP_DIR, CATALOG_META_PATH = resolve_data_paths(data_dir)
 
 NS_MAIN = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
 NS_REL = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
@@ -464,12 +489,133 @@ def ensure_data_dir() -> None:
     BACKUP_DIR.mkdir(parents=True, exist_ok=True)
 
 
-def ensure_catalog_file() -> None:
+def _catalog_has_content(path: Path) -> bool:
+    try:
+        return path.exists() and path.stat().st_size > 0
+    except OSError:
+        return False
+
+
+def maybe_migrate_legacy_catalog() -> bool:
+    """Copy legacy APP_DIR/data catalog into CATALOG_DATA_DIR once, never overwrite."""
+    if CATALOG_PATH.resolve() == LEGACY_CATALOG_PATH.resolve():
+        return False
+    if _catalog_has_content(CATALOG_PATH):
+        return False
+    if not _catalog_has_content(LEGACY_CATALOG_PATH):
+        return False
     ensure_data_dir()
-    if not CATALOG_PATH.exists():
-        with CATALOG_PATH.open("w", encoding="utf-8-sig", newline="") as handle:
-            writer = csv.DictWriter(handle, fieldnames=CATALOG_CSV_FIELDS)
-            writer.writeheader()
+    shutil.copy2(LEGACY_CATALOG_PATH, CATALOG_PATH)
+    write_catalog_meta(
+        source="migrate_legacy",
+        note=f"Migrado desde {LEGACY_CATALOG_PATH}",
+    )
+    return True
+
+
+def _count_catalog_csv_rows(path: Path) -> int:
+    """Count valid catalog rows without calling ensure_catalog_file (avoids recursion)."""
+    if not path.exists():
+        return 0
+    count = 0
+    try:
+        with path.open("r", encoding="utf-8-sig", newline="") as handle:
+            reader = csv.DictReader(handle)
+            for row in reader:
+                if not row:
+                    continue
+                internal_id = normalize_number(row.get("ID interno") or row.get("ID INTERNO") or "")
+                name = (row.get("Nombre") or row.get("NOMBRE") or "").strip()
+                ref = normalize_ref_value(row.get("Ref") or row.get("REF") or "")
+                if internal_id and name and ref:
+                    count += 1
+    except OSError:
+        return 0
+    return count
+
+
+def write_catalog_meta(
+    *,
+    source: str = "save",
+    note: str = "",
+    article_count: Optional[int] = None,
+) -> dict:
+    """Persist catalog metadata next to the CSV (mtime alone is not enough across copies)."""
+    ensure_data_dir()
+    if article_count is None:
+        article_count = _count_catalog_csv_rows(CATALOG_PATH)
+    payload = {
+        "updated_at": datetime.now().isoformat(timespec="seconds"),
+        "article_count": article_count,
+        "source": source,
+        "note": note or "",
+        "catalog_file": CATALOG_PATH.name,
+    }
+    atomic_write_text(
+        CATALOG_META_PATH,
+        json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    return payload
+
+
+def read_catalog_meta() -> dict:
+    if CATALOG_META_PATH.exists():
+        try:
+            data = json.loads(CATALOG_META_PATH.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                return data
+        except (OSError, json.JSONDecodeError):
+            pass
+    # Fallback: derive from file mtime so UI always has a timestamp.
+    updated_at = ""
+    try:
+        if CATALOG_PATH.exists():
+            updated_at = datetime.fromtimestamp(CATALOG_PATH.stat().st_mtime).isoformat(timespec="seconds")
+    except OSError:
+        updated_at = ""
+    return {
+        "updated_at": updated_at,
+        "article_count": _count_catalog_csv_rows(CATALOG_PATH),
+        "source": "mtime",
+        "note": "",
+        "catalog_file": CATALOG_PATH.name,
+    }
+
+
+def catalog_status() -> dict:
+    """Public catalog persistence status for UI/health checks."""
+    ensure_catalog_file()
+    meta = read_catalog_meta()
+    total = catalog_count()
+    configured = bool((os.environ.get(CATALOG_DATA_DIR_ENV) or "").strip())
+    return {
+        "catalog_total": total,
+        "catalog_updated_at": meta.get("updated_at") or "",
+        "catalog_meta_source": meta.get("source") or "",
+        "catalog_data_dir": str(DATA_DIR),
+        "catalog_data_dir_configured": configured,
+        "catalog_persistent": True,
+    }
+
+
+def ensure_catalog_file() -> None:
+    """Ensure runtime catalog exists. Never overwrite an existing catalog with seed/repo copy."""
+    ensure_data_dir()
+    maybe_migrate_legacy_catalog()
+    if CATALOG_PATH.exists():
+        # Existing file wins always — deploys must not replace it with seed.
+        if not CATALOG_META_PATH.exists():
+            write_catalog_meta(source="ensure_existing", note="Metadatos creados para catálogo ya presente.")
+        return
+    if SEED_CATALOG_PATH.exists():
+        shutil.copy2(SEED_CATALOG_PATH, CATALOG_PATH)
+        write_catalog_meta(source="seed", note=f"Inicializado desde {SEED_CATALOG_PATH.name}")
+        return
+    with CATALOG_PATH.open("w", encoding="utf-8-sig", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=CATALOG_CSV_FIELDS)
+        writer.writeheader()
+    write_catalog_meta(source="empty", note="Catálogo vacío creado (solo encabezados).")
 
 
 def catalog_fingerprint(path: Optional[Path] = None) -> str:
@@ -565,6 +711,8 @@ def save_persistent_catalog(by_id: Dict[str, CatalogItem], path: Optional[Path] 
             "Ref": item.ref,
         })
     atomic_write_text(target, buffer.getvalue(), encoding="utf-8-sig")
+    if target.resolve() == CATALOG_PATH.resolve():
+        write_catalog_meta(source="save", article_count=len(by_id))
 
 
 def indexes_from_catalog(by_id: Dict[str, CatalogItem]) -> Tuple[Dict[str, CatalogItem], Dict[str, CatalogItem]]:
@@ -599,6 +747,7 @@ def search_catalog(query: str = "", page: int = 1, page_size: int = CATALOG_PAGE
     start = (page - 1) * page_size
     end = start + page_size
     page_items = items[start:end]
+    status = catalog_status()
     return {
         "ok": True,
         "total": total,
@@ -606,7 +755,9 @@ def search_catalog(query: str = "", page: int = 1, page_size: int = CATALOG_PAGE
         "page_size": page_size,
         "total_pages": max(1, (total + page_size - 1) // page_size) if total else 1,
         "items": [item.to_dict() for item in page_items],
-        "catalog_total": catalog_count(),
+        "catalog_total": status["catalog_total"],
+        "catalog_updated_at": status["catalog_updated_at"],
+        "catalog_data_dir_configured": status["catalog_data_dir_configured"],
     }
 
 
@@ -926,7 +1077,264 @@ def preview_purchase_rows(rows: List[dict]) -> dict:
     }
 
 
-def export_purchase_csv(rows: List[dict]) -> Tuple[bytes, str, List[dict]]:
+def edited_purchase_filename(original_name: str) -> str:
+    """Propose download name: original base + _editado.csv (never overwrites source path)."""
+    base = Path(str(original_name or "compras")).name.strip() or "compras"
+    if base.lower().endswith(".csv"):
+        base = base[:-4]
+    base = re.sub(r"[^\w.\-áéíóúÁÉÍÓÚüÜñÑ ]+", "_", base, flags=re.UNICODE).strip() or "compras"
+    if len(base) > 120:
+        base = base[:120]
+    return f"{base}_editado.csv"
+
+
+def parse_purchase_csv_bytes(
+    data: bytes,
+    *,
+    max_rows: int = PURCHASE_EXPORT_MAX_ROWS,
+) -> dict:
+    """Parse a purchase-template CSV with the stdlib csv module (quoted fields safe).
+
+    Does not mutate the catalog. Returns {ok, headers, rows, errors, warnings, row_count}.
+    """
+    if data is None:
+        return {
+            "ok": False,
+            "headers": [],
+            "rows": [],
+            "errors": [{"type": "empty", "message": "Archivo vacío."}],
+            "warnings": [],
+            "row_count": 0,
+        }
+    if len(data) > MAX_FILE_SIZE:
+        return {
+            "ok": False,
+            "headers": [],
+            "rows": [],
+            "errors": [{"type": "too_large", "message": f"El archivo supera el límite de {MAX_FILE_SIZE} bytes."}],
+            "warnings": [],
+            "row_count": 0,
+        }
+    try:
+        text = data.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        return {
+            "ok": False,
+            "headers": [],
+            "rows": [],
+            "errors": [{"type": "encoding", "message": "El archivo debe estar en UTF-8 (con o sin BOM)."}],
+            "warnings": [],
+            "row_count": 0,
+        }
+    reader = csv.reader(io.StringIO(text), delimiter=PURCHASE_DELIMITER, quotechar='"')
+    try:
+        records = [list(row) for row in reader]
+    except csv.Error as exc:
+        return {
+            "ok": False,
+            "headers": [],
+            "rows": [],
+            "errors": [{"type": "parse", "message": f"CSV malformado: {exc}"}],
+            "warnings": [],
+            "row_count": 0,
+        }
+    if not records:
+        return {
+            "ok": False,
+            "headers": [],
+            "rows": [],
+            "errors": [{"type": "empty", "message": "El archivo CSV está vacío."}],
+            "warnings": [],
+            "row_count": 0,
+        }
+    headers = [str(h if h is not None else "") for h in records[0]]
+    header_errors = _purchase_header_errors(headers)
+    if header_errors:
+        return {
+            "ok": False,
+            "headers": headers,
+            "rows": [],
+            "errors": header_errors,
+            "warnings": [],
+            "row_count": 0,
+        }
+    data_records = records[1:]
+    if len(data_records) > max_rows:
+        return {
+            "ok": False,
+            "headers": headers,
+            "rows": [],
+            "errors": [{
+                "type": "too_many_rows",
+                "message": f"El archivo tiene {len(data_records)} filas; el máximo es {max_rows}.",
+            }],
+            "warnings": [],
+            "row_count": 0,
+        }
+    warnings: List[dict] = []
+    rows: List[dict] = []
+    for index, record in enumerate(data_records, start=1):
+        if len(record) != len(headers):
+            warnings.append({
+                "type": "row_width",
+                "row": index,
+                "message": f"La fila {index} tiene {len(record)} campos; se esperaban {len(headers)}.",
+            })
+        row = {}
+        for col_index, header in enumerate(headers):
+            # Preserve as text — never coerce to int/float.
+            value = record[col_index] if col_index < len(record) else ""
+            row[header] = "" if value is None else str(value)
+        rows.append(row)
+    return {
+        "ok": True,
+        "headers": headers,
+        "rows": rows,
+        "errors": [],
+        "warnings": warnings,
+        "row_count": len(rows),
+    }
+
+
+def _purchase_header_errors(actual: List[str]) -> List[dict]:
+    expected = list(PURCHASE_HEADERS)
+    errors: List[dict] = []
+    if len(actual) != len(expected):
+        errors.append({
+            "type": "header_count",
+            "message": f"Se esperaban {len(expected)} columnas y el archivo tiene {len(actual)}.",
+            "expected": expected,
+            "actual": actual,
+        })
+    missing = [h for h in expected if h not in actual]
+    unexpected = [h for h in actual if h not in expected]
+    if missing:
+        errors.append({
+            "type": "header_missing",
+            "message": f"Faltan encabezados: {', '.join(missing)}",
+            "missing": missing,
+        })
+    if unexpected:
+        errors.append({
+            "type": "header_unexpected",
+            "message": f"Encabezados no reconocidos: {', '.join(unexpected)}",
+            "unexpected": unexpected,
+        })
+    seen = set()
+    duplicates = []
+    for header in actual:
+        if header in seen:
+            duplicates.append(header)
+        seen.add(header)
+    if duplicates:
+        errors.append({
+            "type": "header_duplicate",
+            "message": f"Encabezados duplicados: {', '.join(duplicates)}",
+            "duplicates": duplicates,
+        })
+    if (
+        not missing
+        and not unexpected
+        and len(actual) == len(expected)
+        and actual != expected
+    ):
+        order_mismatch = [
+            {"index": i + 1, "expected": expected[i], "actual": actual[i]}
+            for i in range(len(expected))
+            if actual[i] != expected[i]
+        ]
+        errors.append({
+            "type": "header_order",
+            "message": "El orden de las columnas no coincide con la plantilla.",
+            "orderMismatch": order_mismatch,
+        })
+    return errors
+
+
+def annotate_purchase_rows_with_catalog(
+    rows: List[dict],
+    catalog: Optional[Dict[str, CatalogItem]] = None,
+) -> Tuple[List[dict], List[dict]]:
+    """Attach catalog article info for opening a CSV. Does not mutate the catalog.
+
+    Keeps original ID/name when the ID is unknown. Does not replace a valid ID with its Ref.
+    """
+    if catalog is None:
+        with CATALOG_LOCK:
+            catalog = load_persistent_catalog()
+    warnings: List[dict] = []
+    annotated: List[dict] = []
+    for index, raw in enumerate(rows, start=1):
+        row = {header: ("" if raw.get(header) is None else str(raw.get(header))) for header in PURCHASE_HEADERS}
+        code = row[TARGET_ID_HEADER]
+        name = row[TARGET_NAME_HEADER]
+        article = None
+        if code:
+            resolution = resolve_article_code(code, catalog)
+            if resolution["status"] == "resolved":
+                item = resolution["item"]
+                match = item.get("match") or ""
+                # ID definitivo: keep internal_id; never swap a valid ID for Ref text.
+                if match in ("id", "both"):
+                    row[TARGET_ID_HEADER] = item["internal_id"]
+                    if not name or name == item["name"]:
+                        row[TARGET_NAME_HEADER] = item["name"]
+                        article = {
+                            "internal_id": item["internal_id"],
+                            "name": item["name"],
+                            "ref": item.get("ref") or "",
+                        }
+                    else:
+                        warnings.append({
+                            "row": index,
+                            "field": TARGET_NAME_HEADER,
+                            "message": (
+                                f"El nombre del archivo no coincide con el catálogo "
+                                f"(«{name}» ≠ «{item['name']}»). Se conserva el del archivo; "
+                                "corrígelo o vuelve a seleccionar el artículo antes de descargar."
+                            ),
+                        })
+                        article = None
+                elif match == "ref":
+                    # File had a commercial Ref; keep original text and warn (do not auto-replace).
+                    warnings.append({
+                        "row": index,
+                        "field": TARGET_ID_HEADER,
+                        "message": (
+                            f"«{code}» coincide con una Ref comercial, no con un ID interno. "
+                            "Conservado tal cual; resuelve el artículo antes de descargar."
+                        ),
+                    })
+            elif resolution["status"] == "ambiguous":
+                warnings.append({
+                    "row": index,
+                    "field": TARGET_ID_HEADER,
+                    "message": resolution["message"],
+                })
+            elif resolution["status"] == "not_found":
+                warnings.append({
+                    "row": index,
+                    "field": TARGET_ID_HEADER,
+                    "message": (
+                        f"El ID interno «{code}» no existe en el catálogo actual. "
+                        "Se conserva el valor; corrígelo antes de descargar."
+                    ),
+                })
+        date_value = row.get("FECHA DE AJUSTE") or ""
+        if date_value and not is_valid_purchase_date(date_value):
+            warnings.append({
+                "row": index,
+                "field": "FECHA DE AJUSTE",
+                "message": PURCHASE_DATE_ERROR,
+            })
+        annotated.append({"data": row, "selectedArticle": article})
+    return annotated, warnings
+
+
+def export_purchase_csv(
+    rows: List[dict],
+    source_filename: Optional[str] = None,
+) -> Tuple[bytes, str, List[dict]]:
     """Validate and build purchase CSV bytes. Does not persist to disk."""
     with CATALOG_LOCK:
         catalog = load_persistent_catalog()
@@ -949,8 +1357,11 @@ def export_purchase_csv(rows: List[dict]) -> Tuple[bytes, str, List[dict]]:
 
     # csv module with lineterminator already emits CRLF; encode with BOM.
     data = buffer.getvalue().encode("utf-8-sig")
-    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = f"compras_{stamp}.csv"
+    if source_filename and str(source_filename).strip():
+        filename = edited_purchase_filename(str(source_filename).strip())
+    else:
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"compras_{stamp}.csv"
     return data, filename, []
 
 
@@ -1661,6 +2072,7 @@ def apply_import_preview(preview: ImportPreview, catalog_path: Optional[Path] = 
                 shutil.copy2(backup, catalog_path)
             raise
 
+        meta = read_catalog_meta() if catalog_path.resolve() == CATALOG_PATH.resolve() else {}
         return {
             "ok": True,
             "message": "Catálogo actualizado correctamente.",
@@ -1668,6 +2080,7 @@ def apply_import_preview(preview: ImportPreview, catalog_path: Optional[Path] = 
             "applied_update": applied_update,
             "rejected": rejected,
             "catalog_total": len(current),
+            "catalog_updated_at": meta.get("updated_at") or "",
             "backup": backup.name if backup else None,
         }
 
@@ -1860,11 +2273,17 @@ class AppHandler(BaseHTTPRequestHandler):
             self._serve_static("purchase_ops.js", "application/javascript; charset=utf-8")
             return
         if parsed.path == "/api/health":
+            status = catalog_status()
             self._send_json({
                 "status": "ok",
-                "catalog_total": catalog_count(),
+                "catalog_total": status["catalog_total"],
+                "catalog_updated_at": status["catalog_updated_at"],
+                "catalog_data_dir_configured": status["catalog_data_dir_configured"],
                 "admin_token_required": bool((os.environ.get(ADMIN_TOKEN_ENV) or "").strip()),
             })
+            return
+        if parsed.path == "/api/catalog/status":
+            self._send_json({"ok": True, **catalog_status()})
             return
         if parsed.path == "/api/catalog":
             query = parse_qs(parsed.query)
@@ -1934,13 +2353,21 @@ class AppHandler(BaseHTTPRequestHandler):
             )
             if not ok:
                 status = HTTPStatus.CONFLICT if "ya existe" in message else HTTPStatus.BAD_REQUEST
-                self._send_json({"ok": False, "error": message, "catalog_total": catalog_count()}, status)
+                st = catalog_status()
+                self._send_json({
+                    "ok": False,
+                    "error": message,
+                    "catalog_total": st["catalog_total"],
+                    "catalog_updated_at": st["catalog_updated_at"],
+                }, status)
                 return
+            st = catalog_status()
             self._send_json({
                 "ok": True,
                 "message": message,
                 "item": item.to_dict() if item else None,
-                "catalog_total": catalog_count(),
+                "catalog_total": st["catalog_total"],
+                "catalog_updated_at": st["catalog_updated_at"],
             })
             return
 
@@ -1972,7 +2399,9 @@ class AppHandler(BaseHTTPRequestHandler):
             payload = preview.summary_dict()
             payload["ok"] = True
             payload["errorsDownloadUrl"] = f"/api/download?token={errors_token}"
-            payload["catalog_total"] = catalog_count()
+            st = catalog_status()
+            payload["catalog_total"] = st["catalog_total"]
+            payload["catalog_updated_at"] = st["catalog_updated_at"]
             self._send_json(payload)
             return
 
@@ -2040,7 +2469,8 @@ class AppHandler(BaseHTTPRequestHandler):
             try:
                 payload = read_json_body(self)
                 rows = payload.get("rows", [])
-                data, filename, errors = export_purchase_csv(rows)
+                source_filename = payload.get("source_filename") or payload.get("sourceFilename") or None
+                data, filename, errors = export_purchase_csv(rows, source_filename=source_filename)
             except ValueError as exc:
                 self._send_json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
                 return
@@ -2141,8 +2571,17 @@ def run_server(host: str = HOST, port: int = PORT, open_browser: bool = True) ->
     ensure_catalog_file()
     server = ThreadingHTTPServer((host, port), AppHandler)
     url = f"http://{host}:{port}"
+    status = catalog_status()
     print(f"Convertidor Excel ejecutándose en {url}")
-    print(f"Catálogo local: {CATALOG_PATH}")
+    print(f"Catálogo persistente: {CATALOG_PATH}")
+    print(f"Artículos: {status['catalog_total']} · Última actualización: {status['catalog_updated_at'] or 'n/d'}")
+    if status["catalog_data_dir_configured"]:
+        print(f"CATALOG_DATA_DIR activo: {DATA_DIR}")
+    else:
+        print(
+            f"Aviso: CATALOG_DATA_DIR no está definido; se usa {DATA_DIR}. "
+            "En producción defínalo fuera del árbol de código."
+        )
     if (os.environ.get(ADMIN_TOKEN_ENV) or "").strip():
         print("Administración del catálogo protegida con CATALOG_ADMIN_TOKEN.")
     else:

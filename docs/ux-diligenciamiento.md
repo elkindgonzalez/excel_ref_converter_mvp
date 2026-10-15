@@ -54,6 +54,25 @@ Limitación: con nombres de artículo largos y anchos personalizados elevados, e
 
 Botón «Vista previa del CSV»: misma normalización que `/api/purchase/export` (sin archivo temporal). 14 columnas en orden de plantilla.
 
+## Abrir CSV existente
+
+En **Crear archivo**:
+
+| Acción | Comportamiento |
+|---|---|
+| **Nuevo archivo** | Formulario vacío (pide confirmación si hay cambios sin descargar). |
+| **Abrir CSV existente** | Lee un `.csv` de la plantilla en el navegador; carga las filas en la misma tabla editable. |
+
+- Parser CSV estándar (campos entrecomillados, `;`, UTF-8/BOM); no usa `split(';')`.
+- Exige las 14 columnas exactas en el orden de `docs/plantilla-compras.md`.
+- Conserva valores, orden de filas e IDs como texto.
+- Consulta el catálogo solo para asociar IDs conocidos; **no** modifica el catálogo maestro.
+- IDs desconocidos o fechas inválidas: se conservan con advertencia.
+- Al descargar tras abrir: nombre propuesto `original_editado.csv` (el archivo original no se sobrescribe).
+- Sin persistencia de documentos ni borradores en el servidor.
+
+Flujo: **Abrir CSV → Revisar/Editar → Descargar CSV**.
+
 ## Qué no cambia
 
 Contrato CSV (14 columnas, `;`, UTF-8-BOM, CRLF, `iDENTIFICAR`), catálogo, importación acumulativa, ausencia de borradores.

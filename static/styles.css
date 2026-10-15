@@ -135,6 +135,8 @@ th { background: #f7f9fb; }
 
 .catalog-header h2 { margin: 0; font-size: 20px; }
 .catalog-total { margin: 6px 0 0; color: var(--muted); }
+.catalog-updated { margin: 4px 0 0; font-size: 0.92rem; }
+.open-file-info { margin: 6px 0 0; font-size: 0.92rem; }
 .catalog-toolbar { margin: 12px 0 8px; }
 .form-grid {
   display: grid;

@@ -273,4 +273,83 @@ assert.ok(copyArt.ok);
 assert.strictEqual(copyArt.rows[1].data["ID INTERNO ARTICULO"], "21999");
 assert.strictEqual(copyArt.rows[1].data["NOMBRE DE ARTICULO"], "MOTOR X");
 
+// --- Abrir CSV existente (parser local) ---
+function buildCsv(rows) {
+  const esc = (v) => {
+    const s = String(v == null ? "" : v);
+    if (/[;"\r\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+    return s;
+  };
+  const lines = [HEADERS.join(";")];
+  for (const row of rows) {
+    lines.push(HEADERS.map((h) => esc(row[h])).join(";"));
+  }
+  return `\uFEFF${lines.join("\r\n")}\r\n`;
+}
+
+const csvText = buildCsv([
+  {
+    "ID SUBSIDIARIA": "2",
+    iDENTIFICAR: "A",
+    "FECHA DE AJUSTE": "11/10/2026",
+    "TIPO DE AJUSTE": "17",
+    "UBICACIÓN DE AJUSTE": "5",
+    NOTA: 'con;coma y "comillas"',
+    "ID INTERNO ARTICULO": "21999",
+    "NOMBRE DE ARTICULO": "MOTOR X",
+    "AJUSTE DE CANTIDAD": "-1",
+    ESTADO: "Disponible",
+    "CENTRO DE COSTOS": "",
+    "SUBCENTRO DE COSTOS": "",
+    AREA: "",
+    SOLICITANTE: "ANA",
+  },
+  {
+    "ID SUBSIDIARIA": "2",
+    iDENTIFICAR: "B",
+    "FECHA DE AJUSTE": "31/02/2026",
+    "TIPO DE AJUSTE": "17",
+    "UBICACIÓN DE AJUSTE": "5",
+    NOTA: "línea1\nlínea2",
+    "ID INTERNO ARTICULO": "88888",
+    "NOMBRE DE ARTICULO": "X",
+    "AJUSTE DE CANTIDAD": "2",
+    ESTADO: "Disponible",
+    "CENTRO DE COSTOS": "",
+    "SUBCENTRO DE COSTOS": "",
+    AREA: "",
+    SOLICITANTE: "",
+  },
+]);
+
+const opened = Ops.parsePurchaseCsv(csvText, HEADERS);
+assert.ok(opened.ok, JSON.stringify(opened.errors));
+assert.strictEqual(opened.row_count, 2);
+assert.strictEqual(opened.rows[0]["ID INTERNO ARTICULO"], "21999");
+assert.ok(opened.rows[0].NOTA.includes("con;coma"));
+assert.ok(opened.rows[1].NOTA.includes("línea1"));
+assert.ok(opened.rows[1].NOTA.includes("línea2"));
+assert.strictEqual(opened.rows[1]["FECHA DE AJUSTE"], "31/02/2026");
+
+const openedGrid = Ops.gridRowsFromCsvObjects(opened.rows, HEADERS, 1);
+assert.strictEqual(openedGrid.length, 2);
+assert.strictEqual(openedGrid[0].data.iDENTIFICAR, "A");
+const dupOpened = Ops.duplicateRow(openedGrid, 0, 99);
+assert.strictEqual(dupOpened.rows.length, 3);
+assert.strictEqual(dupOpened.newRow.data["ID INTERNO ARTICULO"], "21999");
+let edited = dupOpened.rows.slice();
+edited[0] = {
+  ...edited[0],
+  data: { ...edited[0].data, NOTA: "EDIT" },
+};
+edited = edited.filter((_, idx) => idx !== 1);
+assert.strictEqual(edited.length, 2);
+
+const badHeaders = Ops.parsePurchaseCsv("A;B\r\n1;2\r\n", HEADERS);
+assert.ok(!badHeaders.ok);
+assert.ok(badHeaders.errors.some((e) => e.type === "header_missing" || e.type === "header_count"));
+
+assert.strictEqual(Ops.editedDownloadFilename("compras_origen.csv"), "compras_origen_editado.csv");
+assert.strictEqual(Ops.editedDownloadFilename("path/to/x.CSV"), "x_editado.csv");
+
 console.log("OK purchase UX ops tests");
