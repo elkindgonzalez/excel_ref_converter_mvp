@@ -105,16 +105,51 @@ class PurchaseFormTests(unittest.TestCase):
         self.assertIn("-3", data2.decode("utf-8-sig"))
 
     def test_06_07_headers_order_and_template_compat(self):
+        expected = [
+            "ID SUBSIDIARIA",
+            "iDENTIFICAR",
+            "FECHA DE AJUSTE",
+            "TIPO DE AJUSTE",
+            "UBICACIÓN DE AJUSTE",
+            "NOTA",
+            "ID INTERNO ARTICULO",
+            "NOMBRE DE ARTICULO",
+            "AJUSTE DE CANTIDAD",
+            "ESTADO",
+            "CENTRO DE COSTOS",
+            "SUBCENTRO DE COSTOS",
+            "AREA",
+            "SOLICITANTE",
+        ]
+        self.assertEqual(app.PURCHASE_HEADERS, expected)
+        self.assertEqual(len(app.PURCHASE_HEADERS), 14)
+        # Must not be alphabetical (regression guard for iDENTIFICAR / ID INTERNO placement).
+        self.assertNotEqual(app.PURCHASE_HEADERS, sorted(app.PURCHASE_HEADERS))
+        self.assertEqual(app.PURCHASE_HEADERS.index("ID INTERNO ARTICULO"), 6)
+        self.assertEqual(app.PURCHASE_HEADERS.index("NOMBRE DE ARTICULO"), 7)
+        self.assertLess(
+            app.PURCHASE_HEADERS.index("NOMBRE DE ARTICULO"),
+            app.PURCHASE_HEADERS.index("AJUSTE DE CANTIDAD"),
+        )
+
         contract = app.purchase_template_contract()
-        self.assertEqual(contract["headers"], app.PURCHASE_HEADERS)
+        self.assertEqual(contract["headers"], expected)
         self.assertEqual(contract["delimiter"], ";")
-        data, _, errors = app.export_purchase_csv([sample_row()])
+        self.assertEqual(contract["encoding"], "utf-8-sig")
+        self.assertEqual(contract["line_terminator"], "CRLF")
+
+        row = sample_row()
+        data, _, errors = app.export_purchase_csv([row])
         self.assertEqual(errors, [])
+        self.assertTrue(data.startswith(b"\xef\xbb\xbf"))
         raw = data.decode("utf-8-sig")
-        self.assertTrue(raw.endswith("\r\n") or "\r\n" in raw)
-        rows = list(csv.reader(io.StringIO(raw), delimiter=";"))
-        self.assertEqual(rows[0], app.PURCHASE_HEADERS)
-        self.assertEqual(rows[0][1], "iDENTIFICAR")
+        self.assertIn("\r\n", raw)
+        parsed = list(csv.reader(io.StringIO(raw), delimiter=";"))
+        self.assertEqual(parsed[0], expected)
+        self.assertEqual(parsed[0][1], "iDENTIFICAR")
+        # Diligenced values land in the same positions as the plantilla headers.
+        for idx, header in enumerate(expected):
+            self.assertEqual(parsed[1][idx], row[header], msg=f"mismatch at col {header}")
 
     def test_08_special_chars_and_empty_optional(self):
         row = sample_row(

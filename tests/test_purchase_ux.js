@@ -86,6 +86,19 @@ assert.strictEqual(pasted.rows[0].data["ID SUBSIDIARIA"], "2");
 assert.strictEqual(pasted.rows[0].data.iDENTIFICAR, "TAG");
 assert.strictEqual(pasted.rows[1].data.iDENTIFICAR, "TAG2");
 
+// Pegado alineado al orden de plantilla: col 7/8 = ID/nombre (derivados → error), col 9 = cantidad
+const plantillaLine = [
+  "2", "TAGX", "15/10/2026", "17", "5", "NOTA-X",
+  "21999", "MOTOR X", "-9", "Disponible", "707", "7070", "TEATRO", "ANA",
+];
+pasted = Ops.applyPaste([baseRow(1)], 0, "ID SUBSIDIARIA", [plantillaLine], HEADERS);
+assert.strictEqual(pasted.rows[0].data["NOTA"], "NOTA-X");
+assert.strictEqual(pasted.rows[0].data["AJUSTE DE CANTIDAD"], "-9");
+assert.strictEqual(pasted.rows[0].data.ESTADO, "Disponible");
+assert.strictEqual(pasted.rows[0].data.SOLICITANTE, "ANA");
+assert.ok(pasted.errors.some((e) => e.field === "ID INTERNO ARTICULO"));
+assert.ok(pasted.errors.some((e) => e.field === "NOMBRE DE ARTICULO"));
+
 // paste into derived article fields reports errors
 pasted = Ops.applyPaste([baseRow(1)], 0, Ops.ARTICLE_ID, [["999"]], HEADERS);
 assert.ok(pasted.errors.length >= 1);
@@ -105,7 +118,34 @@ const inconsistent = {
 };
 assert.strictEqual(Ops.articleConsistent(inconsistent), false);
 
-// 11-12 export order and 14 columns
+// 11-12 export order and 14 columns — exact plantilla order (no alphabetical, no UI reorder)
+const EXPECTED_PLANTILLA = [
+  "ID SUBSIDIARIA",
+  "iDENTIFICAR",
+  "FECHA DE AJUSTE",
+  "TIPO DE AJUSTE",
+  "UBICACIÓN DE AJUSTE",
+  "NOTA",
+  "ID INTERNO ARTICULO",
+  "NOMBRE DE ARTICULO",
+  "AJUSTE DE CANTIDAD",
+  "ESTADO",
+  "CENTRO DE COSTOS",
+  "SUBCENTRO DE COSTOS",
+  "AREA",
+  "SOLICITANTE",
+];
+assert.deepStrictEqual(HEADERS, EXPECTED_PLANTILLA);
+assert.deepStrictEqual(Ops.plantillaColumns(HEADERS), EXPECTED_PLANTILLA);
+
+const uiCols = Ops.visibleColumns(HEADERS);
+assert.strictEqual(uiCols[0], Ops.ARTICLE_COL);
+assert.deepStrictEqual(uiCols.slice(1), EXPECTED_PLANTILLA);
+assert.strictEqual(uiCols.indexOf("ID INTERNO ARTICULO"), 7); // helper + 6 before
+assert.strictEqual(uiCols.indexOf("NOMBRE DE ARTICULO"), 8);
+assert.ok(uiCols.indexOf("ID INTERNO ARTICULO") < uiCols.indexOf("AJUSTE DE CANTIDAD"));
+assert.ok(uiCols.indexOf("NOMBRE DE ARTICULO") < uiCols.indexOf("AJUSTE DE CANTIDAD"));
+
 const ordered = Ops.exportOrder([
   Ops.applyArticle(baseRow(1, { data: { iDENTIFICAR: "FIRST" } }), article),
   Ops.applyArticle(baseRow(2, { data: { iDENTIFICAR: "SECOND" } }), article2),
@@ -115,6 +155,11 @@ assert.strictEqual(HEADERS.length, 14);
 assert.strictEqual(ordered[0][1], "FIRST");
 assert.strictEqual(ordered[1][1], "SECOND");
 assert.strictEqual(HEADERS[1], "iDENTIFICAR");
+assert.strictEqual(ordered[0][6], "21999");
+assert.strictEqual(ordered[0][7], "MOTOR X");
+assert.strictEqual(ordered[0][8], "-1");
+assert.strictEqual(ordered[1][6], "475");
+assert.strictEqual(ordered[1][7], "CINTA");
 
 // 14 no data loss on clone
 const original = Ops.applyArticle(baseRow(1, { data: { NOTA: "ÁÉÍ" } }), article);

@@ -211,14 +211,13 @@
   }
 
   function visibleColumns(headers) {
-    // UI order: article search, other fields (except id/name), then id, name
-    const cols = [ARTICLE_COL];
-    for (const h of headers) {
-      if (h === ARTICLE_ID || h === ARTICLE_NAME) continue;
-      cols.push(h);
-    }
-    cols.push(ARTICLE_ID, ARTICLE_NAME);
-    return cols;
+    // Artículo (búsqueda) es helper UI; las 14 columnas siguen el orden exacto de la plantilla.
+    return [ARTICLE_COL].concat(headers);
+  }
+
+  /** Las 14 columnas de plantilla en orden de contrato (sin el helper de búsqueda). */
+  function plantillaColumns(headers) {
+    return headers.slice();
   }
 
   function applyPaste(rows, startRow, startColKey, grid, headers) {
@@ -339,6 +338,7 @@
     articleConsistent,
     parseClipboardTSV,
     visibleColumns,
+    plantillaColumns,
     applyPaste,
     defaultColumnWidthsPx,
     resizeColumn,

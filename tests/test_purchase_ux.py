@@ -33,10 +33,30 @@ class PurchaseUxOpsTests(unittest.TestCase):
         self.assertTrue(OPS_JS.exists())
 
     def test_template_still_fourteen_columns(self):
+        expected = [
+            "ID SUBSIDIARIA",
+            "iDENTIFICAR",
+            "FECHA DE AJUSTE",
+            "TIPO DE AJUSTE",
+            "UBICACIÓN DE AJUSTE",
+            "NOTA",
+            "ID INTERNO ARTICULO",
+            "NOMBRE DE ARTICULO",
+            "AJUSTE DE CANTIDAD",
+            "ESTADO",
+            "CENTRO DE COSTOS",
+            "SUBCENTRO DE COSTOS",
+            "AREA",
+            "SOLICITANTE",
+        ]
         contract = app.purchase_template_contract()
         self.assertEqual(len(contract["headers"]), 14)
+        self.assertEqual(contract["headers"], expected)
         self.assertEqual(contract["headers"][1], "iDENTIFICAR")
+        self.assertEqual(contract["headers"][6], "ID INTERNO ARTICULO")
+        self.assertEqual(contract["headers"][7], "NOMBRE DE ARTICULO")
         self.assertEqual(contract["delimiter"], ";")
+        self.assertNotEqual(contract["headers"], sorted(contract["headers"]))
 
     def test_export_preserves_order_after_logical_duplicate(self):
         # Mirrors UX duplicate then export: order must match row order.
