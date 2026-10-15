@@ -2,41 +2,38 @@
 
 ## Arquitectura
 
-Se conserva el servidor HTTP nativo de la biblioteca estándar (`ThreadingHTTPServer`) y el parser XLSX basado en `zipfile` + `xml.etree`.
+Se conserva el servidor HTTP nativo (`ThreadingHTTPServer`) y el parser XLSX con `zipfile` + `xml.etree`.
 
-**Por qué:** el MVP no justifica aún FastAPI/Flask ni openpyxl. Añadir dependencias aumentaría fricción de instalación en Windows de usuarios finales sin aportar capacidad crítica en esta etapa.
+**Por qué:** el MVP no justifica FastAPI/Flask ni openpyxl en esta etapa.
 
-**Cuándo migrar:** si aparecen autenticación multi-usuario, colas de proceso, despliegue containerizado con varios workers o Excel legacy `.xls`.
+**Cuándo migrar:** autenticación multi-usuario, colas, Excel `.xls` legacy o despliegue multi-worker.
 
-## Identidad del catálogo
+## Flujo principal: diligenciamiento directo
 
-La identidad del artículo es el **ID interno**. El índice por `Ref` se usa solo para conversión.
+La UI ya no convierte archivos de compras cargados. El usuario crea el CSV desde un formulario editable.
 
-**Por qué:** el inventario puede corregir la referencia comercial de un mismo artículo; la clave estable es el ID interno.
+**Por qué:** el dolor real era rellenar IDs/nombres correctos; cargar un Excel con referencias para “convertir” añadía fricción y errores. El destino espera ID interno real + nombre completo.
 
-## Conversión Ref → ID
+La conversión legacy (`process_*` / `POST /api/process`) se mantiene para CLI y pruebas de regresión del catálogo, pero no se expone en la navegación.
 
-`ID INTERNO ARTICULO` en archivos de compras contiene la referencia comercial. La coincidencia es exacta sobre `Ref`. No hay fuzzy matching.
+## Contrato de plantilla
 
-**Por qué:** una coincidencia aproximada puede asignar el artículo incorrecto en inventario/facturación.
+Los encabezados, el delimitador `;`, UTF-8-BOM y CRLF se tomaron del archivo real `Alexis Compras pruebas.csv`. No se inventaron columnas.
 
-Si todas las filas elegibles fallan, la operación se considera error. Un “éxito” sin conversiones ocultaría un catálogo desactualizado.
+`ID INTERNO ARTICULO` en el CSV de salida es el **ID interno del catálogo**, no la referencia comercial.
 
-## Importación acumulativa en dos fases
+## Búsqueda de artículos
 
-Vista previa + confirmación con huella SHA-256 del catálogo, lock en memoria, respaldo y escritura atómica (`os.replace`).
+`GET /api/catalog/suggest` devuelve como máximo 20–50 coincidencias priorizando exactas y prefijos. El navegador no descarga el catálogo completo.
 
-**Por qué:** evita actualizaciones parciales y condiciones de carrera entre operadores concurrentes en el mismo proceso.
+**Por qué:** con >20.000 artículos, cargar todo en el cliente sería lento y frágil; el filtrado en servidor escala lo suficiente para este MVP.
 
-## Autorización administrativa
+## Persistencia
 
-- Sin `CATALOG_ADMIN_TOKEN`: mutaciones solo desde clientes locales.
-- Con token: se exige cabecera `X-Admin-Token`.
+- Formulario: solo memoria del navegador (sesión).
+- CSV exportado: token en memoria del servidor con TTL; sin escritura permanente de compras.
+- Catálogo: CSV en `data/` con respaldos y escritura atómica.
 
-**Por qué (deber ser):** cualquier endpoint que muta el maestro de artículos debe autenticarse antes de exposición pública. En MVP local el bind a `127.0.0.1` mitiga el riesgo; en despliegue el token (o un proxy con auth) es obligatorio.
+## Identidad e importación del catálogo
 
-## Normalización de referencias
-
-Se preservan ceros a la izquierda y texto alfanumérico. La notación científica solo se convierte cuando el entero resultante es exacto y acotado.
-
-**Por qué:** Excel suele serializar números largos o con ceros de forma destructiva; el convertidor no debe empeorar la pérdida de información.
+Sin cambios conceptuales respecto a la rama de importación: identidad por ID interno, importación acumulativa, conflictos por Ref, token admin / localhost.

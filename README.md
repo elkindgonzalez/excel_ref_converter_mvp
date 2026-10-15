@@ -1,9 +1,11 @@
-# Convertidor de artículos — MVP
+# Compras y catálogo — MVP
 
-Aplicación web local (Python 3.10+, sin dependencias externas) para:
+Aplicación web local (Python 3.10+, sin dependencias externas) con dos módulos:
 
-1. **Convertir** archivos de compras Excel/CSV: reemplaza la referencia comercial en `ID INTERNO ARTICULO` por el ID interno del catálogo y completa `NOMBRE DE ARTICULO`.
-2. **Actualizar el catálogo maestro** de forma acumulativa desde exportaciones de inventario (`.xlsx` / `.csv`).
+1. **Crear archivo** — diligencia compras en una tabla editable, selecciona artículos del catálogo y descarga un CSV compatible con la plantilla de destino.
+2. **Catálogo de artículos** — consulta, alta manual e importación acumulativa desde Excel/CSV de inventario.
+
+La **única** carga de archivos en la interfaz es la actualización del catálogo. No se cargan archivos de compras para convertir.
 
 ## Requisitos
 
@@ -19,7 +21,7 @@ Aplicación web local (Python 3.10+, sin dependencias externas) para:
 python3 app.py
 ```
 
-Abrirá `http://127.0.0.1:8765` (usa `--no-browser` para no abrir el navegador).
+URL: `http://127.0.0.1:8765`
 
 ```bash
 python3 app.py --host 127.0.0.1 --port 8765 --no-browser
@@ -33,111 +35,60 @@ Doble clic en `iniciar_windows.bat` o:
 .\iniciar_windows.ps1
 ```
 
-### Procesamiento por consola
+## Crear archivo
 
-```bash
-python3 app.py --process archivo.xlsx --output resultado.csv
-```
+1. Abre la pestaña **Crear archivo**.
+2. Busca artículos por Ref, ID interno o nombre (sugerencias desde el servidor; no se descarga el catálogo completo).
+3. Al seleccionar, se completan `ID INTERNO ARTICULO` (ID real) y `NOMBRE DE ARTICULO`.
+4. Completa el resto de campos de la plantilla.
+5. Agrega o elimina filas según necesites.
+6. Pulsa **Descargar CSV**.
 
-## Funcionalidades
+Los datos del formulario viven solo en la sesión del navegador. El CSV generado se entrega con token temporal en memoria; no se guarda de forma permanente en disco.
 
-### Conversión de archivos
+### Plantilla CSV
 
-1. Carga un `.xlsx` o `.csv` con columnas `ID INTERNO ARTICULO` y `NOMBRE DE ARTICULO`.
-2. Interpreta `ID INTERNO ARTICULO` como **referencia comercial** (`Ref` del catálogo), nunca como ID interno.
-3. Busca coincidencia **exacta** en el catálogo.
-4. Escribe el `ID interno` y el `Nombre` completo.
-5. Conserva el resto de columnas y el orden de filas.
-6. Genera CSV (una hoja) o ZIP (varias hojas).
-7. Reporta inconsistencias y permite descargarlas en CSV.
+Contrato tomado de `Alexis Compras pruebas.csv`:
 
-Si ninguna referencia elegible se convierte, la operación se reporta como error (no como éxito vacío).
+- UTF-8 con BOM
+- Delimitador `;`
+- CRLF
+- 14 columnas en orden fijo (incluye el encabezado literal `iDENTIFICAR`)
 
-### Catálogo de artículos
+Detalle: `docs/plantilla-compras.md`.
 
-- Consulta y búsqueda paginada.
-- Alta manual de artículos.
-- **Actualizar catálogo de artículos**: importación acumulativa desde inventario.
+## Catálogo de artículos
 
-Columnas esperadas del inventario:
+- Búsqueda paginada.
+- Alta manual.
+- **Actualizar catálogo**: vista previa → confirmación, acumulativa (nunca reemplazo total), con respaldos y detección de conflictos.
 
-| Columna origen | Uso en catálogo |
-|---|---|
-| `ID interno` | Identidad del artículo |
-| `Nombre` | Descripción completa |
-| `Nombre para mostrar` | `Ref` (referencia comercial) |
+Archivo maestro: `data/catalogo_articulos.csv` (`ID interno`, `Nombre`, `Ref`).
 
-Si falta la referencia, se intenta extraer del patrón inequívoco `REF-<código>` en el nombre.
+## APIs principales
 
-## Estructura del catálogo
+| Método | Ruta | Uso |
+|---|---|---|
+| `GET` | `/api/purchase/template` | Contrato de plantilla |
+| `GET` | `/api/catalog/suggest?q=` | Autocompletado de artículos |
+| `POST` | `/api/purchase/export` | Valida filas y prepara descarga CSV |
+| `GET` | `/api/download?token=` | Descarga temporal |
+| `GET` | `/api/catalog` | Lista/busca catálogo |
+| `POST` | `/api/catalog/import/preview` | Vista previa importación (admin) |
+| `POST` | `/api/catalog/import/confirm` | Confirma importación (admin) |
 
-Archivo: `data/catalogo_articulos.csv`
+Admin: cabecera `X-Admin-Token` cuando exista `CATALOG_ADMIN_TOKEN`.
 
-| Campo | Descripción |
-|---|---|
-| `ID interno` | Identificador definitivo |
-| `Nombre` | Descripción completa |
-| `Ref` | Referencia comercial |
-
-Respaldos automáticos en `data/backups/` (máximo 20).
-
-## Reglas de actualización del catálogo
-
-- El Excel **no reemplaza** el catálogo completo.
-- ID nuevo → agregar.
-- ID existente con datos distintos → actualizar (campos vacíos conservan el valor actual).
-- Ausentes del Excel → conservar.
-- Referencia ya asignada a otro ID → conflicto; no se modifica.
-- Referencias duplicadas contradictorias en el archivo → rechazo.
-- Nunca elimina registros en una importación.
-- Flujo en dos etapas: **vista previa** → **confirmación**.
-- Antes de escribir: respaldo, verificación de huella del catálogo, revalidación y escritura atómica.
-
-## Manejo de errores
-
-- Archivos > 50 MB, ZIP maliciosos o Excel inválidos se rechazan.
-- Referencias no encontradas se conservan y se listan en el reporte.
-- Fallos al guardar restauran el respaldo cuando es posible.
-- Operaciones de administración del catálogo requieren cliente local o el token `CATALOG_ADMIN_TOKEN`.
+El endpoint legacy `POST /api/process` permanece disponible para CLI/pruebas, pero no aparece en la UI.
 
 ## Pruebas
 
 ```bash
-python3 -m unittest tests.test_catalog_and_conversion -v
+python3 -m unittest discover -s tests -v
 ```
 
-Las pruebas usan catálogos temporales aislados; **no modifican** `data/catalogo_articulos.csv`.
+Las pruebas usan catálogos temporales; no modifican el catálogo real.
 
-## APIs
+## Despliegue
 
-| Método | Ruta | Descripción |
-|---|---|---|
-| `GET` | `/api/health` | Estado y total del catálogo |
-| `POST` | `/api/process` | Convierte Excel/CSV |
-| `GET` | `/api/download?token=` | Descarga resultado o reportes |
-| `GET` | `/api/catalog` | Lista/busca catálogo |
-| `POST` | `/api/catalog` | Agrega artículo (admin) |
-| `POST` | `/api/catalog/import/preview` | Vista previa de importación (admin) |
-| `POST` | `/api/catalog/import/confirm` | Confirma importación (admin) |
-
-Cabecera admin: `X-Admin-Token: <token>` cuando `CATALOG_ADMIN_TOKEN` está definido.
-
-## Consideraciones para despliegue
-
-**Etapa actual (MVP local):** ejecutar solo en `127.0.0.1` es suficiente.
-
-**Antes de exposición en red / producción:**
-
-1. Definir `CATALOG_ADMIN_TOKEN` y no exponer mutaciones del catálogo sin él.
-2. Mantener el bind en localhost detrás de un reverse proxy con TLS y autenticación, o no publicar el puerto.
-3. Persistir `data/` en volumen con backups externos periódicos.
-4. No montar el servicio como escritura pública anónima.
-5. Revisar límites de tamaño y cuota de disco para respaldos.
-
-Decisión técnica detallada: `docs/decisiones-tecnicas.md`.
-
-## Seguridad del MVP
-
-- El archivo original nunca se sobrescribe.
-- La conversión **no modifica** el catálogo maestro.
-- Procesamiento 100 % local; no se envían archivos a servicios externos.
+MVP local en `127.0.0.1`. Antes de exponer en red: token admin, TLS/auth en proxy, volumen persistente para `data/`. Ver `docs/decisiones-tecnicas.md`.

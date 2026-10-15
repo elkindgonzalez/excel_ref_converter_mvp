@@ -1,0 +1,185 @@
+from __future__ import annotations
+
+import csv
+import io
+import shutil
+import tempfile
+import time
+import unittest
+from pathlib import Path
+from unittest import mock
+
+import app
+
+
+def sample_row(**overrides) -> dict:
+    row = {
+        "ID SUBSIDIARIA": "2",
+        "iDENTIFICAR": "280926-PRUEBA",
+        "FECHA DE AJUSTE": "30/09/2025",
+        "TIPO DE AJUSTE": "17",
+        "UBICACIÓN DE AJUSTE": "5",
+        "NOTA": "CONSUMO DE ASEO",
+        "ID INTERNO ARTICULO": "21999",
+        "NOMBRE DE ARTICULO": "MOTOR GENERATOR CÓD: HEC (REF-12948087)",
+        "AJUSTE DE CANTIDAD": "-1",
+        "ESTADO": "Disponible",
+        "CENTRO DE COSTOS": "707",
+        "SUBCENTRO DE COSTOS": "7070",
+        "AREA": "TEATRO",
+        "SOLICITANTE": "ANA TRUJILLO",
+    }
+    row.update(overrides)
+    return row
+
+
+class PurchaseFormTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = Path(tempfile.mkdtemp(prefix="purchase_test_"))
+        self.catalog_path = self.tmp / "catalogo_articulos.csv"
+        self.backup_dir = self.tmp / "backups"
+        self.backup_dir.mkdir()
+        self._write_catalog([
+            ("21999", "MOTOR GENERATOR CÓD: HEC (REF-12948087)", "12948087"),
+            ("475", "CINTA AISLANTE ÁÉÍ (REF-100002)", "100002"),
+            ("999", "ZERO PAD (REF-00123)", "00123"),
+        ])
+        self.patches = [
+            mock.patch.object(app, "CATALOG_PATH", self.catalog_path),
+            mock.patch.object(app, "BACKUP_DIR", self.backup_dir),
+            mock.patch.object(app, "DATA_DIR", self.tmp),
+        ]
+        for p in self.patches:
+            p.start()
+        app.DOWNLOADS.clear()
+
+    def tearDown(self) -> None:
+        for p in self.patches:
+            p.stop()
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _write_catalog(self, rows: list[tuple[str, str, str]]) -> None:
+        with self.catalog_path.open("w", encoding="utf-8-sig", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=app.CATALOG_CSV_FIELDS)
+            writer.writeheader()
+            for internal_id, name, ref in rows:
+                writer.writerow({"ID interno": internal_id, "Nombre": name, "Ref": ref})
+
+    def test_01_create_without_input_file(self):
+        data, filename, errors = app.export_purchase_csv([sample_row()])
+        self.assertEqual(errors, [])
+        self.assertTrue(filename.endswith(".csv"))
+        self.assertTrue(data.startswith(b"\xef\xbb\xbf"))
+
+    def test_02_03_04_suggest_and_assign_id_name(self):
+        result = app.suggest_catalog("12948087", limit=10)
+        self.assertEqual(len(result["items"]), 1)
+        item = result["items"][0]
+        self.assertEqual(item["internal_id"], "21999")
+        self.assertEqual(item["ref"], "12948087")
+        self.assertIn("MOTOR", item["name"])
+
+        data, _filename, errors = app.export_purchase_csv([sample_row(
+            **{
+                "ID INTERNO ARTICULO": item["internal_id"],
+                "NOMBRE DE ARTICULO": item["name"],
+            }
+        )])
+        self.assertEqual(errors, [])
+        text = data.decode("utf-8-sig")
+        self.assertIn("21999", text)
+        self.assertIn("MOTOR GENERATOR", text)
+
+    def test_05_add_edit_delete_rows_logic(self):
+        rows = [sample_row(), sample_row(**{"iDENTIFICAR": "B", "ID INTERNO ARTICULO": "475",
+                                            "NOMBRE DE ARTICULO": "CINTA AISLANTE ÁÉÍ (REF-100002)"})]
+        # "delete" second row by exporting only first
+        data, _, errors = app.export_purchase_csv(rows[:1])
+        self.assertEqual(errors, [])
+        parsed = list(csv.reader(io.StringIO(data.decode("utf-8-sig")), delimiter=";"))
+        self.assertEqual(len(parsed), 2)  # header + 1
+        # edit quantity
+        edited = sample_row(**{"AJUSTE DE CANTIDAD": "-3"})
+        data2, _, errors2 = app.export_purchase_csv([edited])
+        self.assertEqual(errors2, [])
+        self.assertIn("-3", data2.decode("utf-8-sig"))
+
+    def test_06_07_headers_order_and_template_compat(self):
+        contract = app.purchase_template_contract()
+        self.assertEqual(contract["headers"], app.PURCHASE_HEADERS)
+        self.assertEqual(contract["delimiter"], ";")
+        data, _, errors = app.export_purchase_csv([sample_row()])
+        self.assertEqual(errors, [])
+        raw = data.decode("utf-8-sig")
+        self.assertTrue(raw.endswith("\r\n") or "\r\n" in raw)
+        rows = list(csv.reader(io.StringIO(raw), delimiter=";"))
+        self.assertEqual(rows[0], app.PURCHASE_HEADERS)
+        self.assertEqual(rows[0][1], "iDENTIFICAR")
+
+    def test_08_special_chars_and_empty_optional(self):
+        row = sample_row(
+            **{
+                "NOTA": "CONSUMO ÁÉÍÑ — “especial”",
+                "CENTRO DE COSTOS": "",
+                "SUBCENTRO DE COSTOS": "",
+                "AREA": "",
+                "SOLICITANTE": "",
+            }
+        )
+        data, _, errors = app.export_purchase_csv([row])
+        self.assertEqual(errors, [])
+        text = data.decode("utf-8-sig")
+        self.assertIn("ÁÉÍÑ", text)
+
+    def test_09_nonexistent_article(self):
+        _data, _filename, errors = app.export_purchase_csv([
+            sample_row(**{"ID INTERNO ARTICULO": "999999", "NOMBRE DE ARTICULO": "X"}),
+        ])
+        self.assertTrue(errors)
+        self.assertTrue(any("no existe" in e["message"] for e in errors))
+
+    def test_09b_mismatched_name(self):
+        _data, _filename, errors = app.export_purchase_csv([
+            sample_row(**{"NOMBRE DE ARTICULO": "NOMBRE INCORRECTO"}),
+        ])
+        self.assertTrue(any("no corresponde" in e["message"] for e in errors))
+
+    def test_10_large_catalog_suggest(self):
+        big = {str(i): app.CatalogItem(str(i), f"ARTICULO {i} REF-{i}", str(100000 + i)) for i in range(1, 20001)}
+        big["21999"] = app.CatalogItem("21999", "TARGET NAME", "12948087")
+        with mock.patch.object(app, "load_persistent_catalog", return_value=big):
+            with mock.patch.object(app, "catalog_count", return_value=len(big)):
+                started = time.perf_counter()
+                result = app.suggest_catalog("12948087", limit=20)
+                elapsed = time.perf_counter() - started
+        self.assertEqual(result["items"][0]["internal_id"], "21999")
+        self.assertLess(elapsed, 2.0)
+        self.assertLessEqual(len(result["items"]), 20)
+
+    def test_11_catalog_import_still_works(self):
+        inv = "ID interno,Nombre,Nombre para mostrar\n88001,NUEVO,555\n".encode("utf-8-sig")
+        preview = app.build_import_preview(inv, "inv.csv", self.catalog_path)
+        self.assertEqual(preview.new_count, 1)
+        result = app.apply_import_preview(preview, self.catalog_path)
+        self.assertEqual(result["applied_new"], 1)
+        catalog = app.load_persistent_catalog(self.catalog_path)
+        self.assertIn("88001", catalog)
+        self.assertIn("21999", catalog)
+
+    def test_12_no_persistence_of_generated_files(self):
+        data, filename, errors = app.export_purchase_csv([sample_row()])
+        self.assertEqual(errors, [])
+        token = app.store_download(filename, data, "text/csv; charset=utf-8")
+        self.assertIn(token, app.DOWNLOADS)
+        # Ensure nothing written under DATA_DIR except catalog/backups scaffolding
+        generated = [p for p in self.tmp.rglob("*") if p.is_file() and p.name.startswith("compras_")]
+        self.assertEqual(generated, [])
+        # Token download is ephemeral memory only
+        with app.DOWNLOADS_LOCK:
+            stored = app.DOWNLOADS[token]
+        self.assertEqual(stored[1], filename)
+        self.assertEqual(stored[2], data)
+
+
+if __name__ == "__main__":
+    unittest.main()

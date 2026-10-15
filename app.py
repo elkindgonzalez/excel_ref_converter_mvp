@@ -84,6 +84,49 @@ CATALOG_REF_HEADER = "REF"
 CATALOG_DISPLAY_HEADER = "NOMBRE PARA MOSTRAR"
 CATALOG_CSV_FIELDS = ["ID interno", "Nombre", "Ref"]
 
+# Plantilla exacta de "Alexis Compras pruebas.csv" (UTF-8-BOM, delimitador ';', CRLF).
+PURCHASE_HEADERS = [
+    "ID SUBSIDIARIA",
+    "iDENTIFICAR",
+    "FECHA DE AJUSTE",
+    "TIPO DE AJUSTE",
+    "UBICACIÓN DE AJUSTE",
+    "NOTA",
+    "ID INTERNO ARTICULO",
+    "NOMBRE DE ARTICULO",
+    "AJUSTE DE CANTIDAD",
+    "ESTADO",
+    "CENTRO DE COSTOS",
+    "SUBCENTRO DE COSTOS",
+    "AREA",
+    "SOLICITANTE",
+]
+PURCHASE_DELIMITER = ";"
+PURCHASE_LINETERMINATOR = "\r\n"
+PURCHASE_REQUIRED_FIELDS = [
+    "ID SUBSIDIARIA",
+    "iDENTIFICAR",
+    "FECHA DE AJUSTE",
+    "TIPO DE AJUSTE",
+    "UBICACIÓN DE AJUSTE",
+    "ID INTERNO ARTICULO",
+    "NOMBRE DE ARTICULO",
+    "AJUSTE DE CANTIDAD",
+    "ESTADO",
+]
+PURCHASE_OPTIONAL_FIELDS = [
+    "NOTA",
+    "CENTRO DE COSTOS",
+    "SUBCENTRO DE COSTOS",
+    "AREA",
+    "SOLICITANTE",
+]
+PURCHASE_DATE_RE = re.compile(r"^\d{2}/\d{2}/\d{4}$")
+PURCHASE_QTY_RE = re.compile(r"^-?\d+(?:[.,]\d+)?$")
+CATALOG_SUGGEST_LIMIT_DEFAULT = 20
+CATALOG_SUGGEST_LIMIT_MAX = 50
+PURCHASE_EXPORT_MAX_ROWS = 5000
+
 CATALOG_LOCK = threading.RLock()
 ADMIN_TOKEN_ENV = "CATALOG_ADMIN_TOKEN"
 
@@ -561,6 +604,183 @@ def search_catalog(query: str = "", page: int = 1, page_size: int = CATALOG_PAGE
         "items": [item.to_dict() for item in page_items],
         "catalog_total": catalog_count(),
     }
+
+
+def suggest_catalog(query: str = "", limit: int = CATALOG_SUGGEST_LIMIT_DEFAULT) -> dict:
+    """Fast typeahead over catalog without shipping the full catalog to the browser."""
+    limit = min(max(1, limit), CATALOG_SUGGEST_LIMIT_MAX)
+    needle = (query or "").strip()
+    if len(needle) < 1:
+        return {"ok": True, "items": [], "query": query, "catalog_total": catalog_count()}
+    needle_cf = needle.casefold()
+    needle_norm = normalize_ref_value(needle)
+    with CATALOG_LOCK:
+        items = list(load_persistent_catalog().values())
+
+    exact: List[CatalogItem] = []
+    prefix: List[CatalogItem] = []
+    contains: List[CatalogItem] = []
+    for item in items:
+        ref_cf = item.ref.casefold()
+        id_cf = item.internal_id.casefold()
+        name_cf = item.name.casefold()
+        if needle_norm and (item.ref == needle_norm or item.internal_id == needle_norm):
+            exact.append(item)
+        elif ref_cf.startswith(needle_cf) or id_cf.startswith(needle_cf):
+            prefix.append(item)
+        elif needle_cf in ref_cf or needle_cf in id_cf or needle_cf in name_cf:
+            contains.append(item)
+        if len(exact) >= limit:
+            break
+
+    ranked = exact + prefix + contains
+    # De-duplicate while preserving rank.
+    seen: set[str] = set()
+    selected: List[CatalogItem] = []
+    for item in ranked:
+        if item.internal_id in seen:
+            continue
+        seen.add(item.internal_id)
+        selected.append(item)
+        if len(selected) >= limit:
+            break
+
+    return {
+        "ok": True,
+        "query": query,
+        "items": [item.to_dict() for item in selected],
+        "catalog_total": catalog_count(),
+    }
+
+
+def purchase_template_contract() -> dict:
+    return {
+        "ok": True,
+        "headers": list(PURCHASE_HEADERS),
+        "delimiter": PURCHASE_DELIMITER,
+        "encoding": "utf-8-sig",
+        "line_terminator": "CRLF",
+        "required_fields": list(PURCHASE_REQUIRED_FIELDS),
+        "optional_fields": list(PURCHASE_OPTIONAL_FIELDS),
+        "article_fields": {
+            "id": TARGET_ID_HEADER,
+            "name": TARGET_NAME_HEADER,
+        },
+        "notes": (
+            "Contrato tomado de 'Alexis Compras pruebas.csv'. "
+            "Los encabezados y el orden son exactos (incluye 'iDENTIFICAR')."
+        ),
+    }
+
+
+def _cell_str(value: object) -> str:
+    if value is None:
+        return ""
+    return strip_invisible_chars(str(value)).strip()
+
+
+def validate_purchase_rows(
+    rows: List[dict],
+    catalog: Optional[Dict[str, CatalogItem]] = None,
+) -> Tuple[List[dict], List[dict]]:
+    """Validate purchase form rows. Returns (normalized_rows, errors)."""
+    if catalog is None:
+        with CATALOG_LOCK:
+            catalog = load_persistent_catalog()
+    if not isinstance(rows, list):
+        raise ValueError("El cuerpo debe incluir una lista 'rows'.")
+    if not rows:
+        raise ValueError("Agrega al menos una fila antes de descargar.")
+    if len(rows) > PURCHASE_EXPORT_MAX_ROWS:
+        raise ValueError(f"Máximo {PURCHASE_EXPORT_MAX_ROWS} filas por descarga.")
+
+    normalized: List[dict] = []
+    errors: List[dict] = []
+
+    for index, raw in enumerate(rows, start=1):
+        if not isinstance(raw, dict):
+            errors.append({"row": index, "field": "", "message": "Fila inválida."})
+            continue
+        row = {header: _cell_str(raw.get(header, "")) for header in PURCHASE_HEADERS}
+        row_errors: List[dict] = []
+
+        for field_name in PURCHASE_REQUIRED_FIELDS:
+            if not row[field_name]:
+                row_errors.append({
+                    "row": index,
+                    "field": field_name,
+                    "message": f"Campo obligatorio vacío: {field_name}",
+                })
+
+        if row["FECHA DE AJUSTE"] and not PURCHASE_DATE_RE.fullmatch(row["FECHA DE AJUSTE"]):
+            row_errors.append({
+                "row": index,
+                "field": "FECHA DE AJUSTE",
+                "message": "Fecha inválida. Usa el formato DD/MM/AAAA.",
+            })
+
+        if row["AJUSTE DE CANTIDAD"] and not PURCHASE_QTY_RE.fullmatch(row["AJUSTE DE CANTIDAD"].replace(" ", "")):
+            row_errors.append({
+                "row": index,
+                "field": "AJUSTE DE CANTIDAD",
+                "message": "Cantidad inválida. Usa un número (puede ser negativo).",
+            })
+
+        internal_id = normalize_number(row[TARGET_ID_HEADER])
+        name = row[TARGET_NAME_HEADER]
+        if internal_id:
+            item = catalog.get(internal_id)
+            if item is None:
+                row_errors.append({
+                    "row": index,
+                    "field": TARGET_ID_HEADER,
+                    "message": f"El artículo con ID interno {internal_id} no existe en el catálogo.",
+                })
+            else:
+                row[TARGET_ID_HEADER] = item.internal_id
+                if name and name != item.name:
+                    row_errors.append({
+                        "row": index,
+                        "field": TARGET_NAME_HEADER,
+                        "message": "El nombre no corresponde al ID interno seleccionado en el catálogo.",
+                    })
+                elif not name:
+                    row[TARGET_NAME_HEADER] = item.name
+
+        if row_errors:
+            errors.extend(row_errors)
+        else:
+            normalized.append(row)
+
+    return normalized, errors
+
+
+def export_purchase_csv(rows: List[dict]) -> Tuple[bytes, str, List[dict]]:
+    """Validate and build purchase CSV bytes. Does not persist to disk."""
+    with CATALOG_LOCK:
+        catalog = load_persistent_catalog()
+    if not catalog:
+        raise ValueError("El catálogo está vacío. Actualiza el catálogo antes de crear archivos.")
+    normalized, errors = validate_purchase_rows(rows, catalog)
+    if errors:
+        return b"", "", errors
+
+    buffer = io.StringIO(newline="")
+    writer = csv.writer(
+        buffer,
+        delimiter=PURCHASE_DELIMITER,
+        lineterminator=PURCHASE_LINETERMINATOR,
+        quoting=csv.QUOTE_MINIMAL,
+    )
+    writer.writerow(PURCHASE_HEADERS)
+    for row in normalized:
+        writer.writerow([row.get(header, "") for header in PURCHASE_HEADERS])
+
+    # csv module with lineterminator already emits CRLF; encode with BOM.
+    data = buffer.getvalue().encode("utf-8-sig")
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"compras_{stamp}.csv"
+    return data, filename, []
 
 
 def add_catalog_item(internal_id: str, name: str, ref: str) -> Tuple[bool, str, Optional[CatalogItem]]:
@@ -1389,7 +1609,7 @@ def require_catalog_admin(handler: BaseHTTPRequestHandler) -> Optional[str]:
 
 
 class AppHandler(BaseHTTPRequestHandler):
-    server_version = "ExcelRefConverter/1.3"
+    server_version = "ExcelRefConverter/1.4"
 
     def log_message(self, format: str, *args) -> None:
         sys.stdout.write("[%s] %s\n" % (self.log_date_time_string(), format % args))
@@ -1451,6 +1671,19 @@ class AppHandler(BaseHTTPRequestHandler):
                 self._send_json({"ok": False, "error": "Parámetros de paginación inválidos."}, HTTPStatus.BAD_REQUEST)
                 return
             self._send_json(search_catalog(q, page, page_size))
+            return
+        if parsed.path == "/api/catalog/suggest":
+            query = parse_qs(parsed.query)
+            q = query.get("q", [""])[0]
+            try:
+                limit = int(query.get("limit", [str(CATALOG_SUGGEST_LIMIT_DEFAULT)])[0] or str(CATALOG_SUGGEST_LIMIT_DEFAULT))
+            except ValueError:
+                self._send_json({"ok": False, "error": "Parámetro limit inválido."}, HTTPStatus.BAD_REQUEST)
+                return
+            self._send_json(suggest_catalog(q, limit))
+            return
+        if parsed.path == "/api/purchase/template":
+            self._send_json(purchase_template_contract())
             return
         if parsed.path == "/api/download":
             token = parse_qs(parsed.query).get("token", [""])[0]
@@ -1569,43 +1802,72 @@ class AppHandler(BaseHTTPRequestHandler):
             self._send_json(result)
             return
 
-        if parsed.path != "/api/process":
-            self.send_error(HTTPStatus.NOT_FOUND)
+        if parsed.path == "/api/purchase/export":
+            try:
+                payload = read_json_body(self)
+                rows = payload.get("rows", [])
+                data, filename, errors = export_purchase_csv(rows)
+            except ValueError as exc:
+                self._send_json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
+                return
+            except Exception as exc:
+                print(f"Error al exportar compras: {exc}", file=sys.stderr)
+                self._send_json(
+                    {"ok": False, "error": "No fue posible generar el archivo de compras."},
+                    HTTPStatus.INTERNAL_SERVER_ERROR,
+                )
+                return
+            if errors:
+                self._send_json({"ok": False, "error": "Hay errores de validación.", "errors": errors}, HTTPStatus.BAD_REQUEST)
+                return
+            token = store_download(filename, data, "text/csv; charset=utf-8")
+            self._send_json({
+                "ok": True,
+                "filename": filename,
+                "downloadUrl": f"/api/download?token={token}",
+                "rows": len(rows),
+                "catalog_total": catalog_count(),
+            })
             return
 
-        try:
-            filename, file_data = parse_multipart_file(self)
-            result = process_input_bytes(file_data, filename)
-        except ValueError as exc:
-            self._send_json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
-            return
-        except Exception as exc:
-            print(f"Error no controlado: {exc}", file=sys.stderr)
-            self._send_json(
-                {"ok": False, "error": "No fue posible procesar el archivo. Verifica que no esté dañado."},
-                HTTPStatus.INTERNAL_SERVER_ERROR,
-            )
+        # Legacy conversion endpoint retained for CLI/tests; not exposed in the main UI.
+        if parsed.path == "/api/process":
+            try:
+                filename, file_data = parse_multipart_file(self)
+                result = process_input_bytes(file_data, filename)
+            except ValueError as exc:
+                self._send_json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
+                return
+            except Exception as exc:
+                print(f"Error no controlado: {exc}", file=sys.stderr)
+                self._send_json(
+                    {"ok": False, "error": "No fue posible procesar el archivo. Verifica que no esté dañado."},
+                    HTTPStatus.INTERNAL_SERVER_ERROR,
+                )
+                return
+
+            token = store_download(result.filename, result.data, result.content_type)
+            issues_url = None
+            if result.summary.issues:
+                issues_token = store_download(
+                    f"{sanitize_base_name(filename)}_inconsistencias.csv",
+                    result.issues_csv,
+                    "text/csv; charset=utf-8",
+                )
+                issues_url = f"/api/download?token={issues_token}"
+
+            self._send_json({
+                "ok": True,
+                "filename": result.filename,
+                "downloadUrl": f"/api/download?token={token}",
+                "issuesDownloadUrl": issues_url,
+                "contentType": result.content_type,
+                "summary": result.summary.to_dict(),
+                "catalog_total": catalog_count(),
+            })
             return
 
-        token = store_download(result.filename, result.data, result.content_type)
-        issues_url = None
-        if result.summary.issues:
-            issues_token = store_download(
-                f"{sanitize_base_name(filename)}_inconsistencias.csv",
-                result.issues_csv,
-                "text/csv; charset=utf-8",
-            )
-            issues_url = f"/api/download?token={issues_token}"
-
-        self._send_json({
-            "ok": True,
-            "filename": result.filename,
-            "downloadUrl": f"/api/download?token={token}",
-            "issuesDownloadUrl": issues_url,
-            "contentType": result.content_type,
-            "summary": result.summary.to_dict(),
-            "catalog_total": catalog_count(),
-        })
+        self.send_error(HTTPStatus.NOT_FOUND)
 
     def do_PUT(self) -> None:
         parsed = urlparse(self.path)
