@@ -1,16 +1,34 @@
-const fileInput = document.getElementById('fileInput');
-const selectButton = document.getElementById('selectButton');
-const processButton = document.getElementById('processButton');
-const dropZone = document.getElementById('dropZone');
-const fileName = document.getElementById('fileName');
-const status = document.getElementById('status');
-const resultCard = document.getElementById('resultCard');
+/* global PurchaseOps */
+const Ops = window.PurchaseOps;
+
+const tabCreate = document.getElementById('tabCreate');
+const tabCatalog = document.getElementById('tabCatalog');
+const panelCreate = document.getElementById('panelCreate');
+const panelCatalog = document.getElementById('panelCatalog');
+const purchaseHead = document.getElementById('purchaseHead');
+const purchaseBody = document.getElementById('purchaseBody');
+const purchaseCols = document.getElementById('purchaseCols');
+const purchaseTable = document.getElementById('purchaseTable');
+const purchaseScroll = document.getElementById('purchaseScroll');
+const newFileButton = document.getElementById('newFileButton');
+const openCsvButton = document.getElementById('openCsvButton');
+const openCsvInput = document.getElementById('openCsvInput');
+const openFileInfo = document.getElementById('openFileInfo');
+const addRowButton = document.getElementById('addRowButton');
+const fillDownButton = document.getElementById('fillDownButton');
+const resetWidthsButton = document.getElementById('resetWidthsButton');
+const previewCsvButton = document.getElementById('previewCsvButton');
 const downloadButton = document.getElementById('downloadButton');
-const issuesSection = document.getElementById('issuesSection');
-const issuesBody = document.getElementById('issuesBody');
+const createStatus = document.getElementById('createStatus');
+const createErrors = document.getElementById('createErrors');
+const createErrorsBody = document.getElementById('createErrorsBody');
+const csvPreviewPanel = document.getElementById('csvPreviewPanel');
+const csvPreviewHead = document.getElementById('csvPreviewHead');
+const csvPreviewBody = document.getElementById('csvPreviewBody');
+const csvPreviewStatus = document.getElementById('csvPreviewStatus');
+
 const catalogTotal = document.getElementById('catalogTotal');
-const toggleCatalogButton = document.getElementById('toggleCatalogButton');
-const catalogPanel = document.getElementById('catalogPanel');
+const catalogUpdatedAt = document.getElementById('catalogUpdatedAt');
 const catalogForm = document.getElementById('catalogForm');
 const catalogFormStatus = document.getElementById('catalogFormStatus');
 const catalogSearch = document.getElementById('catalogSearch');
@@ -19,45 +37,1319 @@ const catalogPrev = document.getElementById('catalogPrev');
 const catalogNext = document.getElementById('catalogNext');
 const catalogPageInfo = document.getElementById('catalogPageInfo');
 const catalogListStatus = document.getElementById('catalogListStatus');
-const outputFiles = document.getElementById('outputFiles');
+const adminToken = document.getElementById('adminToken');
 
-let selectedFile = null;
+const importFileInput = document.getElementById('importFileInput');
+const importSelectButton = document.getElementById('importSelectButton');
+const importDropZone = document.getElementById('importDropZone');
+const importFileName = document.getElementById('importFileName');
+const importPreviewButton = document.getElementById('importPreviewButton');
+const importConfirmButton = document.getElementById('importConfirmButton');
+const importErrorsButton = document.getElementById('importErrorsButton');
+const importStatus = document.getElementById('importStatus');
+const importPreviewCard = document.getElementById('importPreviewCard');
+
+let template = null;
+let rows = [];
+let rowSeq = 1;
 let catalogPage = 1;
 const catalogPageSize = 25;
 let catalogTotalPages = 1;
 let searchTimer = null;
+let suggestTimers = new Map();
+let importToken = null;
+let selectedImportFile = null;
+/** Original CSV name when editing an opened file (client-only; never written to disk by the server). */
+let openedCsvName = null;
+let formDirty = false;
 
-function fileTypeLabel(name) {
-  const lower = name.toLowerCase();
-  if (lower.endsWith('.csv')) return 'CSV';
-  if (lower.endsWith('.xlsx')) return 'Excel';
-  return 'Desconocido';
+let columnWidths = {};
+let visibleCols = [];
+let active = { rowIndex: 0, colKey: Ops.ARTICLE_ID };
+let selectionEndRow = null;
+let clipboardCells = null;
+let resizing = null;
+let draftByCell = new Map();
+
+const ACTIONS_PX = 78;
+
+function markDirty() {
+  formDirty = true;
 }
 
-function setFile(file) {
-  if (!file) return;
-  const lower = file.name.toLowerCase();
-  if (!(lower.endsWith('.xlsx') || lower.endsWith('.csv'))) {
-    selectedFile = null;
-    fileName.textContent = '';
-    processButton.disabled = true;
-    status.textContent = 'Selecciona un archivo con extensión .xlsx o .csv.';
-    status.className = 'status error';
+function clearDirty() {
+  formDirty = false;
+}
+
+function confirmDiscardIfDirty(actionLabel) {
+  if (!formDirty) return true;
+  return window.confirm(
+    `Hay cambios sin descargar. ¿${actionLabel || 'Continuar'} y descartar los cambios?`,
+  );
+}
+
+function updateOpenFileInfo(filename, rowCount) {
+  if (!openFileInfo) return;
+  if (!filename) {
+    openFileInfo.hidden = true;
+    openFileInfo.textContent = '';
     return;
   }
-  selectedFile = file;
-  const sizeMb = (file.size / 1024 / 1024).toFixed(2);
-  fileName.textContent = `${file.name} · Tipo: ${fileTypeLabel(file.name)} · ${sizeMb} MB`;
-  processButton.disabled = false;
-  status.textContent = '';
-  resultCard.classList.add('hidden');
+  openFileInfo.hidden = false;
+  openFileInfo.textContent = `Archivo abierto: ${filename} · ${rowCount} registro(s)`;
 }
 
-function updateCatalogTotal(total) {
-  if (typeof total === 'number') {
-    catalogTotal.textContent = String(total);
+function adminHeaders(extra = {}) {
+  const headers = { ...extra };
+  const token = (adminToken.value || '').trim();
+  if (token) headers['X-Admin-Token'] = token;
+  return headers;
+}
+
+function formatCatalogUpdatedAt(iso) {
+  if (!iso || typeof iso !== 'string') return '—';
+  const trimmed = iso.trim();
+  if (!trimmed) return '—';
+  const parsed = new Date(trimmed);
+  if (Number.isNaN(parsed.getTime())) return trimmed;
+  try {
+    return parsed.toLocaleString('es-CO', {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  } catch (_) {
+    return trimmed;
   }
 }
+
+function updateCatalogTotal(total, updatedAt) {
+  if (typeof total === 'number') catalogTotal.textContent = String(total);
+  if (catalogUpdatedAt && updatedAt !== undefined) {
+    catalogUpdatedAt.textContent = formatCatalogUpdatedAt(updatedAt);
+  }
+}
+
+function setActiveTab(which) {
+  const create = which === 'create';
+  tabCreate.classList.toggle('active', create);
+  tabCatalog.classList.toggle('active', !create);
+  tabCreate.setAttribute('aria-selected', create ? 'true' : 'false');
+  tabCatalog.setAttribute('aria-selected', create ? 'false' : 'true');
+  panelCreate.classList.toggle('hidden', !create);
+  panelCatalog.classList.toggle('hidden', create);
+  if (!create) {
+    loadCatalog().catch((error) => {
+      catalogListStatus.textContent = error.message;
+      catalogListStatus.className = 'status error';
+    });
+  } else {
+    requestAnimationFrame(distributeWidths);
+  }
+}
+
+function cellKey(rowIndex, colKey) {
+  return `${rowIndex}::${colKey}`;
+}
+
+function nextRowId() {
+  const maxId = rows.reduce((m, r) => Math.max(m, r.id), 0);
+  rowSeq = Math.max(rowSeq, maxId + 1);
+  return rowSeq++;
+}
+
+function makeEmptyRow() {
+  return Ops.emptyRow(template.headers, nextRowId());
+}
+
+function setStatus(message, kind = '') {
+  createStatus.textContent = message || '';
+  createStatus.className = kind ? `status ${kind}` : 'status';
+}
+
+function distributeWidths() {
+  if (!template) return;
+  const width = purchaseScroll.clientWidth || window.innerWidth;
+  columnWidths = Ops.defaultColumnWidthsPx(template.headers, width, ACTIONS_PX);
+  applyColgroup();
+}
+
+function applyColgroup() {
+  purchaseCols.innerHTML = '';
+  const actionCol = document.createElement('col');
+  actionCol.style.width = `${ACTIONS_PX}px`;
+  purchaseCols.appendChild(actionCol);
+  let total = ACTIONS_PX;
+  for (const col of visibleCols) {
+    const c = document.createElement('col');
+    const w = columnWidths[col] || 80;
+    c.style.width = `${w}px`;
+    c.dataset.col = col;
+    purchaseCols.appendChild(c);
+    total += w;
+  }
+  purchaseTable.style.width = `${total}px`;
+  purchaseTable.style.minWidth = '100%';
+}
+
+function renderHead() {
+  visibleCols = Ops.visibleColumns(template.headers);
+  const tr = document.createElement('tr');
+
+  const action = document.createElement('th');
+  action.className = 'col-action';
+  action.innerHTML = '<span class="sr-only">Acciones</span>';
+  tr.appendChild(action);
+
+  for (const col of visibleCols) {
+    const th = document.createElement('th');
+    th.dataset.col = col;
+    th.title = col === Ops.ARTICLE_ID
+      ? `${col} — busca por Ref, ID o nombre`
+      : col;
+    const label = document.createElement('span');
+    label.className = 'th-label';
+    const required = (template.required_fields || []).includes(col);
+    label.textContent = required ? `${Ops.shortLabel(col)} *` : Ops.shortLabel(col);
+    th.appendChild(label);
+    const handle = document.createElement('span');
+    handle.className = 'col-resize';
+    handle.title = 'Arrastrar para redimensionar · Doble clic: ajustar';
+    handle.addEventListener('mousedown', (event) => startResize(event, col));
+    handle.addEventListener('dblclick', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      autoFit(col);
+    });
+    th.appendChild(handle);
+    tr.appendChild(th);
+  }
+
+  purchaseHead.innerHTML = '';
+  purchaseHead.appendChild(tr);
+  applyColgroup();
+}
+
+function startResize(event, col) {
+  event.preventDefault();
+  event.stopPropagation();
+  resizing = { col, startX: event.clientX, startW: columnWidths[col] || 80 };
+  document.body.classList.add('col-resizing');
+}
+
+function onResizeMove(event) {
+  if (!resizing) return;
+  const delta = event.clientX - resizing.startX;
+  columnWidths = Ops.resizeColumn(columnWidths, resizing.col, delta, Ops.MIN_COL_PX[resizing.col]);
+  resizing.startX = event.clientX;
+  resizing.startW = columnWidths[resizing.col];
+  applyColgroup();
+}
+
+function onResizeEnd() {
+  if (!resizing) return;
+  resizing = null;
+  document.body.classList.remove('col-resizing');
+}
+
+function autoFit(col) {
+  const cells = purchaseBody.querySelectorAll(`[data-col="${CSS.escape(col)}"]`);
+  let max = Ops.MIN_COL_PX[col] || 48;
+  const probe = document.createElement('span');
+  probe.style.cssText = 'position:absolute;visibility:hidden;white-space:nowrap;font:12px/1.3 system-ui,sans-serif;';
+  document.body.appendChild(probe);
+  const headerLabel = Ops.shortLabel(col);
+  probe.textContent = headerLabel;
+  max = Math.max(max, probe.offsetWidth);
+  cells.forEach((el) => {
+    const input = el.querySelector('input');
+    probe.textContent = input ? input.value : el.textContent;
+    max = Math.max(max, probe.offsetWidth);
+  });
+  probe.remove();
+  columnWidths = Ops.autoFitColumn(columnWidths, col, max);
+  applyColgroup();
+}
+
+function closeAllSuggest() {
+  document.querySelectorAll('.suggest-list').forEach((el) => el.classList.add('hidden'));
+}
+
+function renderRows({ focus } = {}) {
+  const scrollLeft = purchaseScroll.scrollLeft;
+  const scrollTop = purchaseScroll.scrollTop;
+  purchaseBody.innerHTML = '';
+  rows.forEach((row, index) => {
+    purchaseBody.appendChild(buildRowElement(row, index));
+  });
+  purchaseScroll.scrollLeft = scrollLeft;
+  purchaseScroll.scrollTop = scrollTop;
+  paintSelection();
+  if (focus) {
+    focusCell(focus.rowIndex, focus.colKey, { select: focus.select !== false });
+  }
+}
+
+function buildRowElement(row, index) {
+  const tr = document.createElement('tr');
+  tr.dataset.rowId = String(row.id);
+  tr.dataset.rowIndex = String(index);
+
+  const actionTd = document.createElement('td');
+  actionTd.className = 'col-action';
+  const actions = document.createElement('div');
+  actions.className = 'row-actions';
+
+  const dupBtn = document.createElement('button');
+  dupBtn.type = 'button';
+  dupBtn.className = 'icon-btn';
+  dupBtn.title = 'Duplicar registro';
+  dupBtn.setAttribute('aria-label', 'Duplicar registro');
+  dupBtn.textContent = '⧉';
+  dupBtn.addEventListener('click', (event) => {
+    event.stopPropagation();
+    duplicateAt(index);
+  });
+
+  const delBtn = document.createElement('button');
+  delBtn.type = 'button';
+  delBtn.className = 'icon-btn danger';
+  delBtn.title = 'Eliminar';
+  delBtn.setAttribute('aria-label', 'Eliminar fila');
+  delBtn.textContent = '×';
+  delBtn.addEventListener('click', (event) => {
+    event.stopPropagation();
+    rows = rows.filter((r) => r.id !== row.id);
+    if (!rows.length) rows.push(makeEmptyRow());
+    if (active.rowIndex >= rows.length) active.rowIndex = rows.length - 1;
+    selectionEndRow = null;
+    markDirty();
+    renderRows();
+    setStatus('');
+    createErrors.classList.add('hidden');
+  });
+
+  actions.appendChild(dupBtn);
+  actions.appendChild(delBtn);
+  actionTd.appendChild(actions);
+  tr.appendChild(actionTd);
+
+  for (const col of visibleCols) {
+    tr.appendChild(buildCell(row, index, col));
+  }
+  return tr;
+}
+
+function buildCell(row, index, col) {
+  const td = document.createElement('td');
+  td.dataset.col = col;
+  td.dataset.rowIndex = String(index);
+  td.className = 'grid-cell';
+
+  if (col === Ops.ARTICLE_ID) {
+    td.appendChild(buildArticleIdCell(row, index));
+  } else if (Ops.isDateField(col)) {
+    td.appendChild(buildDateCell(row, index, col));
+  } else {
+    const readonly = col === Ops.ARTICLE_NAME;
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = readonly ? 'cell-input readonly' : 'cell-input';
+    input.readOnly = readonly;
+    input.dataset.col = col;
+    input.dataset.rowIndex = String(index);
+    input.value = row.data[col] || '';
+    input.title = col;
+    wireCellInput(input, row, index, col, {
+      onInput: () => {
+        if (readonly) return;
+        rows[index] = {
+          ...rows[index],
+          data: { ...rows[index].data, [col]: input.value },
+        };
+        markDirty();
+      },
+    });
+    td.appendChild(input);
+  }
+
+  if (index > 0) {
+    const copyPrev = document.createElement('button');
+    copyPrev.type = 'button';
+    copyPrev.className = 'copy-prev';
+    copyPrev.title = 'Copiar desde fila anterior';
+    copyPrev.textContent = '↑';
+    copyPrev.addEventListener('mousedown', (event) => event.preventDefault());
+    copyPrev.addEventListener('click', (event) => {
+      event.stopPropagation();
+      const result = Ops.copyFieldFromPrevious(rows, index, col);
+      if (!result.ok) {
+        setStatus(result.reason, 'warning');
+        return;
+      }
+      rows = result.rows;
+      markDirty();
+      renderRows({ focus: { rowIndex: index, colKey: col } });
+      setStatus('Valor copiado desde la fila anterior.');
+    });
+    td.appendChild(copyPrev);
+  }
+
+  return td;
+}
+
+function trField(rowIndex, col) {
+  return purchaseBody.querySelector(
+    `tr[data-row-index="${rowIndex}"] input[data-col="${CSS.escape(col)}"]`
+  );
+}
+
+function buildDateCell(row, index, col) {
+  const wrap = document.createElement('div');
+  wrap.className = 'date-wrap';
+
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'cell-input date-input';
+  input.placeholder = Ops.DATE_FORMAT;
+  input.inputMode = 'numeric';
+  input.autocomplete = 'off';
+  input.dataset.col = col;
+  input.dataset.rowIndex = String(index);
+  input.title = `${col} (${Ops.DATE_FORMAT})`;
+  input.value = row.data[col] || '';
+
+  const picker = document.createElement('input');
+  picker.type = 'date';
+  picker.className = 'date-picker';
+  picker.title = 'Abrir calendario';
+  picker.setAttribute('aria-label', `Calendario ${col}`);
+  picker.value = Ops.purchaseDateToIso(row.data[col] || '');
+
+  const err = document.createElement('div');
+  err.className = 'cell-error';
+  err.hidden = true;
+
+  function syncError(raw) {
+    const text = String(raw || '').trim();
+    if (!text) {
+      input.classList.remove('invalid');
+      err.hidden = true;
+      err.textContent = '';
+      return true;
+    }
+    if (Ops.isValidPurchaseDate(text)) {
+      input.classList.remove('invalid');
+      err.hidden = true;
+      err.textContent = '';
+      return true;
+    }
+    input.classList.add('invalid');
+    err.hidden = false;
+    err.textContent = Ops.DATE_ERROR;
+    return false;
+  }
+
+  function commitDate(raw, { fromPicker = false } = {}) {
+    const coerced = fromPicker
+      ? { value: Ops.isoToPurchaseDate(raw), ok: !!Ops.isoToPurchaseDate(raw), empty: !raw }
+      : Ops.coercePurchaseDateInput(raw);
+    const nextValue = coerced.empty ? '' : coerced.value;
+    rows[index] = {
+      ...rows[index],
+      data: { ...rows[index].data, [col]: nextValue },
+    };
+    markDirty();
+    input.value = nextValue;
+    picker.value = Ops.purchaseDateToIso(nextValue);
+    // En blur: solo marcar error si hay texto y no es fecha válida completa.
+    if (!nextValue || Ops.isValidPurchaseDate(nextValue)) {
+      syncError(nextValue);
+    } else {
+      syncError(nextValue);
+    }
+  }
+
+  function applyDateMaskFromInput() {
+    const caret = input.selectionStart;
+    const masked = Ops.maskPurchaseDateInput(input.value, caret);
+    input.value = masked.value;
+    try {
+      input.setSelectionRange(masked.cursor, masked.cursor);
+    } catch (_err) {
+      // Algunos inputs search/date pueden ignorar selectionRange.
+    }
+    rows[index] = {
+      ...rows[index],
+      data: { ...rows[index].data, [col]: masked.value },
+    };
+    markDirty();
+    picker.value = Ops.purchaseDateToIso(masked.value);
+    // Mientras se escribe (parcial), no gritar error; sí si ya hay 8 dígitos inválidos.
+    const digits = Ops.dateDigitsOnly(masked.value);
+    if (!digits.length) {
+      syncError('');
+    } else if (digits.length < 8) {
+      input.classList.remove('invalid');
+      err.hidden = true;
+      err.textContent = '';
+    } else {
+      syncError(masked.value);
+    }
+  }
+
+  wireCellInput(input, row, index, col, {
+    onInput: () => applyDateMaskFromInput(),
+  });
+  input.addEventListener('blur', () => {
+    if (!String(input.value || '').trim()) {
+      commitDate('');
+      return;
+    }
+    commitDate(input.value);
+  });
+  picker.addEventListener('change', () => {
+    commitDate(picker.value, { fromPicker: true });
+    focusCell(index, col, { select: false });
+  });
+  picker.addEventListener('click', (event) => event.stopPropagation());
+
+  syncError(input.value);
+  wrap.appendChild(input);
+  wrap.appendChild(picker);
+  wrap.appendChild(err);
+  return wrap;
+}
+
+function showErrorTable(errors) {
+  createErrorsBody.innerHTML = '';
+  for (const err of errors) {
+    const tr = document.createElement('tr');
+    for (const value of [err.row, err.field || '', err.message]) {
+      const td = document.createElement('td');
+      td.textContent = value;
+      tr.appendChild(td);
+    }
+    createErrorsBody.appendChild(tr);
+  }
+  createErrors.classList.remove('hidden');
+}
+
+function wireCellInput(input, _row, index, col, { onInput }) {
+  input.addEventListener('focus', () => {
+    active = { rowIndex: index, colKey: col };
+    if (selectionEndRow == null) selectionEndRow = index;
+    draftByCell.set(cellKey(index, col), input.value);
+    paintSelection();
+  });
+  input.addEventListener('click', (event) => {
+    if (event.shiftKey) {
+      selectionEndRow = index;
+      active = { rowIndex: active.rowIndex, colKey: col };
+      paintSelection();
+    } else {
+      active = { rowIndex: index, colKey: col };
+      selectionEndRow = index;
+      paintSelection();
+    }
+  });
+  input.addEventListener('input', onInput);
+  input.addEventListener('keydown', (event) => onCellKeydown(event, index, col, input));
+}
+
+function paintSelection() {
+  purchaseBody.querySelectorAll('.grid-cell').forEach((td) => td.classList.remove('selected', 'active-cell'));
+  const start = Math.min(active.rowIndex, selectionEndRow == null ? active.rowIndex : selectionEndRow);
+  const end = Math.max(active.rowIndex, selectionEndRow == null ? active.rowIndex : selectionEndRow);
+  for (let i = start; i <= end; i += 1) {
+    const td = purchaseBody.querySelector(`tr[data-row-index="${i}"] td[data-col="${CSS.escape(active.colKey)}"]`);
+    if (td) td.classList.add('selected');
+  }
+  const activeTd = purchaseBody.querySelector(
+    `tr[data-row-index="${active.rowIndex}"] td[data-col="${CSS.escape(active.colKey)}"]`
+  );
+  if (activeTd) activeTd.classList.add('active-cell');
+}
+
+function focusCell(rowIndex, colKey, { select = true } = {}) {
+  const input = trField(rowIndex, colKey);
+  if (!input) return;
+  active = { rowIndex, colKey };
+  if (selectionEndRow == null) selectionEndRow = rowIndex;
+  input.focus();
+  if (select && !input.readOnly) input.select();
+  paintSelection();
+}
+
+function duplicateAt(index) {
+  const result = Ops.duplicateRow(rows, index, nextRowId());
+  rows = result.rows;
+  markDirty();
+  active = { rowIndex: result.newIndex, colKey: firstEditableCol() };
+  selectionEndRow = result.newIndex;
+  renderRows({ focus: { rowIndex: result.newIndex, colKey: firstEditableCol() } });
+  setStatus(`Registro duplicado (fila ${result.newIndex + 1}).`);
+}
+
+function firstEditableCol() {
+  for (const col of visibleCols) {
+    if (col !== Ops.ARTICLE_NAME) return col;
+  }
+  return Ops.ARTICLE_ID;
+}
+
+function buildArticleIdCell(row, index) {
+  const wrap = document.createElement('div');
+  wrap.className = 'suggest-wrap';
+  const input = document.createElement('input');
+  input.type = 'search';
+  input.className = 'cell-input suggest-input';
+  input.placeholder = 'Ref o ID…';
+  input.autocomplete = 'off';
+  input.dataset.col = Ops.ARTICLE_ID;
+  input.dataset.rowIndex = String(index);
+  input.title = 'ID INTERNO ARTICULO — escribe Ref o ID; Enter/Tab resuelve automáticamente';
+  input.value = row.selectedArticle
+    ? String(row.selectedArticle.internal_id || '')
+    : (row._articleQuery || row.data[Ops.ARTICLE_ID] || '');
+  const list = document.createElement('div');
+  list.className = 'suggest-list hidden';
+  const err = document.createElement('div');
+  err.className = 'cell-error';
+  err.hidden = true;
+  if (row._articleError) {
+    err.hidden = false;
+    err.textContent = row._articleError;
+    input.classList.add('invalid');
+  }
+  wireCellInput(input, row, index, Ops.ARTICLE_ID, {
+    onInput: () => {
+      rows[index] = Ops.clearArticle(rows[index]);
+      rows[index]._articleQuery = input.value;
+      delete rows[index]._articleError;
+      err.hidden = true;
+      input.classList.remove('invalid');
+      const nameInput = trField(index, Ops.ARTICLE_NAME);
+      if (nameInput) nameInput.value = '';
+      markDirty();
+      scheduleSuggest(index, input, list);
+    },
+  });
+  input.addEventListener('blur', () => {
+    // Delay so suggest mousedown/click can win.
+    setTimeout(() => {
+      if (document.activeElement === input) return;
+      if (list.contains(document.activeElement)) return;
+      resolveArticleAt(index, { focusNext: false }).catch(() => {});
+    }, 120);
+  });
+  wrap.appendChild(input);
+  wrap.appendChild(list);
+  wrap.appendChild(err);
+  return wrap;
+}
+
+function scheduleSuggest(rowIndex, input, list) {
+  const prev = suggestTimers.get(rowIndex);
+  if (prev) clearTimeout(prev);
+  suggestTimers.set(rowIndex, setTimeout(() => runSuggest(rowIndex, input, list), 220));
+}
+
+function applyResolvedArticle(rowIndex, item, list) {
+  rows[rowIndex] = Ops.applyArticle(rows[rowIndex], item);
+  delete rows[rowIndex]._articleQuery;
+  delete rows[rowIndex]._articleError;
+  markDirty();
+  if (list) list.classList.add('hidden');
+}
+
+function renderSuggestChoices(rowIndex, input, list, items, { ambiguous = false } = {}) {
+  list.innerHTML = '';
+  if (ambiguous) {
+    const note = document.createElement('div');
+    note.className = 'suggest-empty';
+    note.textContent = 'Ambigüedad: elige Ref o ID interno.';
+    list.appendChild(note);
+  }
+  if (!items.length) {
+    list.innerHTML = '<div class="suggest-empty">Sin coincidencias</div>';
+    list.classList.remove('hidden');
+    return;
+  }
+  for (const item of items) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'suggest-item';
+    const tag = item.match ? `<span class="match-tag">${escapeHtml(item.match)}</span>` : '';
+    btn.innerHTML = `<strong>${escapeHtml(item.ref)}</strong> · ID ${escapeHtml(item.internal_id)}${tag}`
+      + `<span>${escapeHtml(item.name)}</span>`;
+    btn.addEventListener('mousedown', (event) => event.preventDefault());
+    btn.addEventListener('click', () => {
+      applyResolvedArticle(rowIndex, item, list);
+      renderRows({ focus: { rowIndex, colKey: 'AJUSTE DE CANTIDAD' } });
+      setStatus(`Artículo resuelto: ID ${item.internal_id}.`);
+    });
+    list.appendChild(btn);
+  }
+  list.classList.remove('hidden');
+}
+
+async function runSuggest(rowIndex, input, list) {
+  const q = input.value.trim();
+  if (q.length < 1) {
+    list.classList.add('hidden');
+    list.innerHTML = '';
+    return;
+  }
+  try {
+    const params = new URLSearchParams({ q, limit: '20' });
+    const response = await fetch(`/api/catalog/suggest?${params}`);
+    const data = await response.json();
+    if (!response.ok || !data.ok) throw new Error(data.error || 'Búsqueda fallida');
+    renderSuggestChoices(rowIndex, input, list, data.items || []);
+  } catch (error) {
+    list.innerHTML = `<div class="suggest-empty">${escapeHtml(error.message)}</div>`;
+    list.classList.remove('hidden');
+  }
+}
+
+async function resolveArticleAt(rowIndex, { focusNext = false } = {}) {
+  const row = rows[rowIndex];
+  if (!row) return { status: 'missing' };
+  if (row.selectedArticle && Ops.articleConsistent(row) && !row._articleQuery) {
+    return { status: 'already' };
+  }
+  const input = trField(rowIndex, Ops.ARTICLE_ID);
+  const q = (input ? input.value : (row._articleQuery || row.data[Ops.ARTICLE_ID] || '')).trim();
+  const list = input && input.parentElement
+    ? input.parentElement.querySelector('.suggest-list')
+    : null;
+  if (!q) {
+    rows[rowIndex] = Ops.clearArticle(rows[rowIndex]);
+    delete rows[rowIndex]._articleQuery;
+    delete rows[rowIndex]._articleError;
+    if (input) {
+      input.value = '';
+      input.classList.remove('invalid');
+    }
+    const nameInput = trField(rowIndex, Ops.ARTICLE_NAME);
+    if (nameInput) nameInput.value = '';
+    return { status: 'empty' };
+  }
+  try {
+    const params = new URLSearchParams({ q });
+    const response = await fetch(`/api/catalog/resolve?${params}`);
+    const data = await response.json();
+    if (!response.ok || !data.ok) throw new Error(data.error || 'No se pudo resolver el artículo');
+    if (data.status === 'resolved' && data.item) {
+      applyResolvedArticle(rowIndex, data.item, list);
+      renderRows({
+        focus: focusNext
+          ? { rowIndex, colKey: 'AJUSTE DE CANTIDAD' }
+          : { rowIndex, colKey: Ops.ARTICLE_ID, select: false },
+      });
+      setStatus(`Artículo resuelto (${data.item.match || 'exacto'}): ID ${data.item.internal_id}.`);
+      return { status: 'resolved', item: data.item };
+    }
+    if (data.status === 'ambiguous') {
+      rows[rowIndex] = Ops.clearArticle(rows[rowIndex]);
+      rows[rowIndex]._articleQuery = q;
+      rows[rowIndex]._articleError = data.message || 'Código ambiguo.';
+      renderRows({ focus: { rowIndex, colKey: Ops.ARTICLE_ID, select: false } });
+      const inputAfter = trField(rowIndex, Ops.ARTICLE_ID);
+      const listAfter = inputAfter && inputAfter.parentElement
+        ? inputAfter.parentElement.querySelector('.suggest-list')
+        : null;
+      if (listAfter) {
+        renderSuggestChoices(rowIndex, inputAfter, listAfter, data.candidates || [], { ambiguous: true });
+      }
+      setStatus(data.message || 'Código ambiguo: elige una opción.', 'warning');
+      return { status: 'ambiguous' };
+    }
+    rows[rowIndex] = Ops.clearArticle(rows[rowIndex]);
+    rows[rowIndex]._articleQuery = q;
+    rows[rowIndex]._articleError = data.message || 'Sin coincidencia exacta.';
+    renderRows({ focus: { rowIndex, colKey: Ops.ARTICLE_ID, select: false } });
+    setStatus(rows[rowIndex]._articleError, 'warning');
+    return { status: 'not_found' };
+  } catch (error) {
+    setStatus(error.message, 'error');
+    return { status: 'error', error };
+  }
+}
+
+function escapeHtml(value) {
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function isEditingText(input) {
+  if (!input || input.tagName !== 'INPUT') return false;
+  if (input.readOnly) return false;
+  const start = input.selectionStart;
+  const end = input.selectionEnd;
+  if (start == null || end == null) return false;
+  return start !== end || document.activeElement === input;
+}
+
+function onCellKeydown(event, index, col, input) {
+  const mod = event.metaKey || event.ctrlKey;
+
+  if (mod && event.key.toLowerCase() === 'd') {
+    event.preventDefault();
+    doFillDown();
+    return;
+  }
+
+  if (event.key === 'Escape') {
+    const key = cellKey(index, col);
+    if (draftByCell.has(key)) {
+      input.value = draftByCell.get(key);
+      if (col !== Ops.ARTICLE_ID && col !== Ops.ARTICLE_NAME) {
+        rows[index].data[col] = input.value;
+      }
+      draftByCell.delete(key);
+    }
+    input.blur();
+    return;
+  }
+
+  if (event.key === 'Enter') {
+    event.preventDefault();
+    const goNextRow = () => {
+      const nextRow = Math.min(rows.length - 1, index + 1);
+      if (nextRow === index) {
+        rows.push(makeEmptyRow());
+        renderRows({ focus: { rowIndex: index + 1, colKey: col } });
+      } else {
+        focusCell(nextRow, col);
+      }
+    };
+    if (col === Ops.ARTICLE_ID) {
+      // Tras resolver, enfoca cantidad en la misma fila (no crea fila vacía).
+      resolveArticleAt(index, { focusNext: true });
+      return;
+    }
+    goNextRow();
+    return;
+  }
+
+  if (event.key === 'Tab') {
+    event.preventDefault();
+    // Skip only nombre (readonly); ID INTERNO es editable (búsqueda/resolución).
+    const editable = visibleCols.filter((c) => c !== Ops.ARTICLE_NAME);
+    const pos = editable.indexOf(col);
+    const moveTab = () => {
+      if (event.shiftKey) {
+        if (pos > 0) focusCell(index, editable[pos - 1]);
+        else if (index > 0) focusCell(index - 1, editable[editable.length - 1]);
+      } else if (pos >= 0 && pos < editable.length - 1) {
+        focusCell(index, editable[pos + 1]);
+      } else if (index < rows.length - 1) {
+        focusCell(index + 1, editable[0]);
+      } else {
+        rows.push(makeEmptyRow());
+        renderRows({ focus: { rowIndex: index + 1, colKey: editable[0] } });
+      }
+    };
+    if (col === Ops.ARTICLE_ID) {
+      resolveArticleAt(index, { focusNext: false }).then((result) => {
+        if (result.status === 'ambiguous' || result.status === 'not_found' || result.status === 'error') {
+          return;
+        }
+        moveTab();
+      });
+      return;
+    }
+    moveTab();
+    return;
+  }
+
+  if (event.shiftKey && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) {
+    event.preventDefault();
+    const delta = event.key === 'ArrowDown' ? 1 : -1;
+    const next = Math.max(0, Math.min(rows.length - 1, (selectionEndRow == null ? index : selectionEndRow) + delta));
+    selectionEndRow = next;
+    paintSelection();
+    return;
+  }
+
+  if (!mod && (event.key === 'ArrowDown' || event.key === 'ArrowUp') && !isEditingText(input)) {
+    // Only navigate if caret at edge / no selection change needed — keep simple: arrow moves rows when not composing text selection intent
+    if (input.selectionStart === input.selectionEnd) {
+      const atStart = input.selectionStart === 0;
+      const atEnd = input.selectionStart === input.value.length;
+      if ((event.key === 'ArrowUp' && atStart) || (event.key === 'ArrowDown' && atEnd) || input.readOnly) {
+        event.preventDefault();
+        const next = Math.max(0, Math.min(rows.length - 1, index + (event.key === 'ArrowDown' ? 1 : -1)));
+        active = { rowIndex: next, colKey: col };
+        selectionEndRow = next;
+        focusCell(next, col, { select: false });
+      }
+    }
+  }
+}
+
+function doFillDown() {
+  const from = active.rowIndex;
+  const to = selectionEndRow == null ? rows.length - 1 : selectionEndRow;
+  if (from === to && to === rows.length - 1 && from < rows.length - 1) {
+    rows = Ops.fillDownRemaining(rows, active.colKey, from);
+  } else if (from === to) {
+    rows = Ops.fillDownRemaining(rows, active.colKey, from);
+  } else {
+    rows = Ops.fillDown(rows, active.colKey, from, to);
+  }
+  markDirty();
+  renderRows({ focus: { rowIndex: from, colKey: active.colKey } });
+  setStatus('Valores rellenados hacia abajo.');
+}
+
+function selectionHasText(input) {
+  return input && typeof input.selectionStart === 'number' && input.selectionStart !== input.selectionEnd;
+}
+
+function onCopy(event) {
+  const input = document.activeElement;
+  if (input && input.classList.contains('cell-input') && selectionHasText(input)) {
+    return; // native text copy
+  }
+  if (!template || !rows.length) return;
+  const start = Math.min(active.rowIndex, selectionEndRow == null ? active.rowIndex : selectionEndRow);
+  const end = Math.max(active.rowIndex, selectionEndRow == null ? active.rowIndex : selectionEndRow);
+  const lines = [];
+  for (let i = start; i <= end; i += 1) {
+    const row = rows[i];
+    let value = '';
+    if (active.colKey === Ops.ARTICLE_ID) {
+      value = row.selectedArticle
+        ? String(row.selectedArticle.internal_id || '')
+        : (row._articleQuery || row.data[Ops.ARTICLE_ID] || '');
+    } else {
+      value = row.data[active.colKey] || '';
+    }
+    lines.push(value);
+  }
+  const text = lines.join('\n');
+  clipboardCells = {
+    colKey: active.colKey,
+    values: lines,
+    articles: rows.slice(start, end + 1).map((r) => Ops.cloneArticle(r.selectedArticle)),
+  };
+  event.clipboardData.setData('text/plain', text);
+  event.preventDefault();
+  setStatus(`Copiado (${lines.length}).`);
+}
+
+function onPaste(event) {
+  const input = document.activeElement;
+  if (input && input.classList.contains('cell-input') && !input.readOnly && selectionHasText(input)) {
+    // Let browser replace selected text; sync on input event.
+    return;
+  }
+  if (input && input.classList.contains('cell-input') && !input.readOnly && input === document.activeElement) {
+    // If caret editing single cell without multi-line paste intent, allow native unless TSV/multi-line
+    const text = event.clipboardData.getData('text/plain');
+    if (!text.includes('\t') && !text.includes('\n') && !text.includes('\r')) {
+      return;
+    }
+  }
+
+  event.preventDefault();
+  const text = event.clipboardData.getData('text/plain');
+  const grid = Ops.parseClipboardTSV(text);
+  if (!grid.length) return;
+
+  // Single-column clipboard from our copy with article integrity
+  if (clipboardCells && clipboardCells.colKey === active.colKey && grid.length >= 1 && grid[0].length === 1) {
+    const start = active.rowIndex;
+    let next = rows.slice();
+    for (let i = 0; i < clipboardCells.values.length; i += 1) {
+      const target = start + i;
+      while (target >= next.length) next.push(makeEmptyRow());
+      if (active.colKey === Ops.ARTICLE_ID || active.colKey === Ops.ARTICLE_NAME) {
+        next[target] = Ops.applyArticle(next[target], clipboardCells.articles[i]);
+      } else {
+        next[target] = {
+          ...next[target],
+          data: { ...next[target].data, [active.colKey]: clipboardCells.values[i] },
+        };
+      }
+    }
+    rows = next;
+    markDirty();
+    renderRows({ focus: { rowIndex: active.rowIndex, colKey: active.colKey } });
+    setStatus('Pegado aplicado.');
+    return;
+  }
+
+  const result = Ops.applyPaste(rows, active.rowIndex, active.colKey, grid, template.headers);
+  rows = result.rows;
+  markDirty();
+  // Ensure ids unique / seq
+  rowSeq = rows.reduce((m, r) => Math.max(m, r.id), 0) + 1;
+  renderRows({ focus: { rowIndex: active.rowIndex, colKey: active.colKey } });
+  if (result.errors.length) {
+    createErrorsBody.innerHTML = '';
+    for (const err of result.errors) {
+      const tr = document.createElement('tr');
+      for (const value of [err.row, err.field, err.message]) {
+        const td = document.createElement('td');
+        td.textContent = value;
+        tr.appendChild(td);
+      }
+      createErrorsBody.appendChild(tr);
+    }
+    createErrors.classList.remove('hidden');
+    setStatus('Pegado parcial con advertencias.', 'warning');
+  } else {
+    createErrors.classList.add('hidden');
+    setStatus('Pegado aplicado.');
+  }
+}
+
+function collectRowsPayload() {
+  return rows.map((row) => {
+    const payload = {};
+    for (const header of template.headers) payload[header] = row.data[header] || '';
+    return payload;
+  });
+}
+
+async function initTemplate() {
+  const response = await fetch('/api/purchase/template');
+  const data = await response.json();
+  if (!response.ok || !data.ok) throw new Error(data.error || 'No se pudo cargar la plantilla.');
+  template = data;
+  rows = [makeEmptyRow()];
+  openedCsvName = null;
+  updateOpenFileInfo(null, 0);
+  clearDirty();
+  renderHead();
+  distributeWidths();
+  renderRows({ focus: { rowIndex: 0, colKey: Ops.ARTICLE_ID, select: false } });
+}
+
+function startNewFile() {
+  if (!confirmDiscardIfDirty('Crear un archivo nuevo')) return;
+  rows = [makeEmptyRow()];
+  rowSeq = 2;
+  openedCsvName = null;
+  updateOpenFileInfo(null, 0);
+  clearDirty();
+  createErrors.classList.add('hidden');
+  csvPreviewPanel.classList.add('hidden');
+  active = { rowIndex: 0, colKey: Ops.ARTICLE_ID };
+  selectionEndRow = 0;
+  renderRows({ focus: { rowIndex: 0, colKey: Ops.ARTICLE_ID, select: false } });
+  setStatus('Formulario vacío listo.');
+}
+
+async function resolveCodeCached(code, cache) {
+  const key = String(code || '').trim();
+  if (!key) return { status: 'empty', item: null, message: '' };
+  if (cache.has(key)) return cache.get(key);
+  const response = await fetch(`/api/catalog/resolve?q=${encodeURIComponent(key)}`);
+  const data = await response.json();
+  if (!response.ok || !data.ok) {
+    const fallback = { status: 'not_found', item: null, message: data.error || 'No se pudo consultar el catálogo.' };
+    cache.set(key, fallback);
+    return fallback;
+  }
+  cache.set(key, data);
+  return data;
+}
+
+/**
+ * After parsing a CSV locally, associate known internal IDs with the catalog.
+ * Never mutates the master catalog. Keeps unknown IDs and invalid dates with warnings.
+ */
+async function hydrateOpenedRows(gridRows) {
+  const warnings = [];
+  const cache = new Map();
+  for (let i = 0; i < gridRows.length; i += 1) {
+    const row = gridRows[i];
+    const code = (row.data[Ops.ARTICLE_ID] || '').trim();
+    const name = (row.data[Ops.ARTICLE_NAME] || '').trim();
+    if (code) {
+      const resolution = await resolveCodeCached(code, cache);
+      if (resolution.status === 'resolved' && resolution.item) {
+        const match = resolution.item.match || '';
+        if (match === 'id' || match === 'both') {
+          row.data[Ops.ARTICLE_ID] = String(resolution.item.internal_id || code);
+          if (!name || name === resolution.item.name) {
+            row.data[Ops.ARTICLE_NAME] = String(resolution.item.name || '');
+            row.selectedArticle = {
+              internal_id: String(resolution.item.internal_id || ''),
+              name: String(resolution.item.name || ''),
+              ref: String(resolution.item.ref || ''),
+            };
+          } else {
+            warnings.push({
+              row: i + 1,
+              field: Ops.ARTICLE_NAME,
+              message: `El nombre del archivo no coincide con el catálogo («${name}» ≠ «${resolution.item.name}»). Se conserva el del archivo.`,
+            });
+            row.selectedArticle = null;
+          }
+        } else if (match === 'ref') {
+          warnings.push({
+            row: i + 1,
+            field: Ops.ARTICLE_ID,
+            message: `«${code}» coincide con una Ref comercial, no con un ID interno. Conservado tal cual; resuelve el artículo antes de descargar.`,
+          });
+          row.selectedArticle = null;
+        }
+      } else if (resolution.status === 'ambiguous') {
+        warnings.push({
+          row: i + 1,
+          field: Ops.ARTICLE_ID,
+          message: resolution.message || 'Código ambiguo entre Ref e ID interno.',
+        });
+        row.selectedArticle = null;
+      } else if (resolution.status === 'not_found') {
+        warnings.push({
+          row: i + 1,
+          field: Ops.ARTICLE_ID,
+          message: `El ID interno «${code}» no existe en el catálogo actual. Se conserva el valor; corrígelo antes de descargar.`,
+        });
+        row.selectedArticle = null;
+      }
+    }
+    const dateValue = row.data['FECHA DE AJUSTE'] || '';
+    if (dateValue && !Ops.isValidPurchaseDate(dateValue)) {
+      warnings.push({
+        row: i + 1,
+        field: 'FECHA DE AJUSTE',
+        message: Ops.DATE_ERROR,
+      });
+    }
+  }
+  return warnings;
+}
+
+async function openPurchaseCsvFile(file) {
+  if (!file) return;
+  const lower = (file.name || '').toLowerCase();
+  if (!lower.endsWith('.csv')) {
+    setStatus('Selecciona un archivo .csv de la plantilla de compras.', 'error');
+    return;
+  }
+  if (file.size > Ops.MAX_OPEN_CSV_BYTES) {
+    setStatus(`El archivo supera el límite de ${(Ops.MAX_OPEN_CSV_BYTES / (1024 * 1024)).toFixed(0)} MB.`, 'error');
+    return;
+  }
+  setStatus('Leyendo CSV…');
+  let text;
+  try {
+    text = await file.text();
+  } catch (error) {
+    setStatus('No fue posible leer el archivo.', 'error');
+    return;
+  }
+  const parsed = Ops.parsePurchaseCsv(text, template.headers, {
+    delimiter: (template && template.delimiter) || ';',
+    maxRows: 5000,
+  });
+  if (!parsed.ok) {
+    const detail = (parsed.errors || []).map((e) => e.message).join(' ');
+    showErrorTable((parsed.errors || []).map((e, idx) => ({
+      row: e.row || '—',
+      field: e.type || 'encabezado',
+      message: e.message,
+    })));
+    setStatus(detail || 'El CSV no es compatible con la plantilla.', 'error');
+    return;
+  }
+  const gridRows = Ops.gridRowsFromCsvObjects(parsed.rows, template.headers, 1);
+  const warnings = await hydrateOpenedRows(gridRows);
+  rows = gridRows.length ? gridRows : [makeEmptyRow()];
+  rowSeq = rows.reduce((m, r) => Math.max(m, r.id), 0) + 1;
+  openedCsvName = file.name;
+  updateOpenFileInfo(openedCsvName, parsed.row_count);
+  clearDirty();
+  active = { rowIndex: 0, colKey: Ops.ARTICLE_ID };
+  selectionEndRow = 0;
+  renderRows({ focus: { rowIndex: 0, colKey: Ops.ARTICLE_ID, select: false } });
+  if (warnings.length || (parsed.warnings && parsed.warnings.length)) {
+    const all = [
+      ...(parsed.warnings || []).map((w) => ({
+        row: w.row || '—',
+        field: w.type || '',
+        message: w.message,
+      })),
+      ...warnings,
+    ];
+    showErrorTable(all);
+    setStatus(
+      `CSV abierto: ${parsed.row_count} registro(s) con ${all.length} advertencia(s). Puedes editar y descargar.`,
+      'warning',
+    );
+  } else {
+    createErrors.classList.add('hidden');
+    setStatus(`CSV abierto: ${parsed.row_count} registro(s) recuperados. Listo para editar.`, 'success');
+  }
+}
+
+newFileButton.addEventListener('click', () => startNewFile());
+openCsvButton.addEventListener('click', () => {
+  if (!confirmDiscardIfDirty('Abrir otro CSV')) return;
+  openCsvInput.value = '';
+  openCsvInput.click();
+});
+openCsvInput.addEventListener('change', async () => {
+  const file = openCsvInput.files && openCsvInput.files[0];
+  if (!file) return;
+  try {
+    await openPurchaseCsvFile(file);
+  } catch (error) {
+    setStatus(error.message || 'No fue posible abrir el CSV.', 'error');
+  } finally {
+    openCsvInput.value = '';
+  }
+});
+
+addRowButton.addEventListener('click', () => {
+  rows.push(makeEmptyRow());
+  markDirty();
+  active = { rowIndex: rows.length - 1, colKey: firstEditableCol() };
+  selectionEndRow = active.rowIndex;
+  renderRows({ focus: { rowIndex: active.rowIndex, colKey: active.colKey } });
+});
+
+fillDownButton.addEventListener('click', () => doFillDown());
+resetWidthsButton.addEventListener('click', () => {
+  distributeWidths();
+  setStatus('Anchos restablecidos.');
+});
+
+async function refreshCsvPreview() {
+  csvPreviewStatus.textContent = 'Generando vista previa…';
+  csvPreviewStatus.className = 'status';
+  try {
+    const response = await fetch('/api/purchase/preview', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ rows: collectRowsPayload() }),
+    });
+    const data = await response.json();
+    if (!response.ok || !data.ok) {
+      if (data.errors && data.errors.length) showErrorTable(data.errors);
+      throw new Error(data.error || 'Vista previa no disponible.');
+    }
+    createErrors.classList.add('hidden');
+    const headers = data.headers || (template && template.headers) || [];
+    csvPreviewHead.innerHTML = '';
+    const headRow = document.createElement('tr');
+    for (const header of headers) {
+      const th = document.createElement('th');
+      th.textContent = header;
+      th.title = header;
+      headRow.appendChild(th);
+    }
+    csvPreviewHead.appendChild(headRow);
+    csvPreviewBody.innerHTML = '';
+    for (const row of data.rows || []) {
+      const tr = document.createElement('tr');
+      for (const header of headers) {
+        const td = document.createElement('td');
+        td.textContent = row[header] || '';
+        tr.appendChild(td);
+      }
+      csvPreviewBody.appendChild(tr);
+    }
+    csvPreviewStatus.textContent = `${data.row_count} fila(s) — mismos valores que la descarga.`;
+    csvPreviewStatus.className = 'status success';
+    return data;
+  } catch (error) {
+    csvPreviewStatus.textContent = error.message;
+    csvPreviewStatus.className = 'status error';
+    throw error;
+  }
+}
+
+previewCsvButton.addEventListener('click', async () => {
+  csvPreviewPanel.classList.remove('hidden');
+  csvPreviewPanel.open = true;
+  try {
+    await refreshCsvPreview();
+    setStatus('Vista previa actualizada.');
+  } catch (error) {
+    setStatus(error.message, 'error');
+  }
+});
+
+downloadButton.addEventListener('click', async () => {
+  for (const row of rows) {
+    if (!Ops.articleConsistent(row) && ((row.data[Ops.ARTICLE_ID] || row.data[Ops.ARTICLE_NAME]))) {
+      setStatus('Hay artículos inconsistentes. Selecciona el artículo desde la búsqueda.', 'error');
+      return;
+    }
+  }
+  const dateErrors = Ops.validateDateFields(
+    rows,
+    (template && template.required_fields) || [],
+  );
+  if (dateErrors.length) {
+    showErrorTable(dateErrors);
+    setStatus('Hay fechas inválidas. Corrige DD/MM/AAAA antes de descargar.', 'error');
+    // Refresca marcas visuales junto a cada celda fecha.
+    renderRows({ focus: { rowIndex: active.rowIndex, colKey: active.colKey, select: false } });
+    return;
+  }
+  downloadButton.disabled = true;
+  setStatus('Validando y generando CSV…');
+  createErrors.classList.add('hidden');
+  try {
+    const response = await fetch('/api/purchase/export', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        rows: collectRowsPayload(),
+        source_filename: openedCsvName || undefined,
+      }),
+    });
+    const data = await response.json();
+    if (!response.ok || !data.ok) {
+      if (data.errors && data.errors.length) {
+        showErrorTable(data.errors);
+      }
+      throw new Error(data.error || 'No fue posible generar el archivo.');
+    }
+    const link = document.createElement('a');
+    link.href = data.downloadUrl;
+    link.download = data.filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    clearDirty();
+    setStatus(`CSV generado (${data.rows} fila(s)): ${data.filename}`, 'success');
+  } catch (error) {
+    setStatus(error.message, 'error');
+  } finally {
+    downloadButton.disabled = false;
+  }
+});
+
+document.addEventListener('click', (event) => {
+  if (!event.target.closest('.suggest-wrap')) closeAllSuggest();
+});
+document.addEventListener('mousemove', onResizeMove);
+document.addEventListener('mouseup', onResizeEnd);
+document.addEventListener('copy', onCopy);
+document.addEventListener('paste', onPaste);
+window.addEventListener('resize', () => {
+  // Keep custom widths; only grow table min width context
+  applyColgroup();
+});
+
+tabCreate.addEventListener('click', () => setActiveTab('create'));
+tabCatalog.addEventListener('click', () => setActiveTab('catalog'));
 
 async function loadCatalog() {
   const query = new URLSearchParams({
@@ -65,179 +1357,32 @@ async function loadCatalog() {
     page: String(catalogPage),
     page_size: String(catalogPageSize),
   });
-  const response = await fetch(`/api/catalog?${query.toString()}`);
+  const response = await fetch(`/api/catalog?${query}`);
   const data = await response.json();
-  if (!response.ok || !data.ok) {
-    throw new Error(data.error || 'No fue posible cargar el catálogo.');
-  }
-
-  updateCatalogTotal(data.catalog_total);
+  if (!response.ok || !data.ok) throw new Error(data.error || 'No fue posible cargar el catálogo.');
+  updateCatalogTotal(data.catalog_total, data.catalog_updated_at);
   catalogTotalPages = data.total_pages || 1;
   catalogPageInfo.textContent = `Página ${data.page} de ${catalogTotalPages} · ${data.total} resultado(s)`;
   catalogPrev.disabled = data.page <= 1;
   catalogNext.disabled = data.page >= catalogTotalPages;
-
   catalogBody.innerHTML = '';
   for (const item of data.items) {
-    const row = document.createElement('tr');
-    row.dataset.ref = item.ref;
-
-    const refCell = document.createElement('td');
-    refCell.textContent = item.ref;
-    row.appendChild(refCell);
-
-    const idCell = document.createElement('td');
-    idCell.textContent = item.internal_id;
-    row.appendChild(idCell);
-
-    const nameCell = document.createElement('td');
-    nameCell.textContent = item.name;
-    row.appendChild(nameCell);
-    catalogBody.appendChild(row);
+    const tr = document.createElement('tr');
+    for (const value of [item.ref, item.internal_id, item.name]) {
+      const td = document.createElement('td');
+      td.textContent = value;
+      tr.appendChild(td);
+    }
+    catalogBody.appendChild(tr);
   }
 }
-
-selectButton.addEventListener('click', () => fileInput.click());
-fileInput.addEventListener('change', () => setFile(fileInput.files[0]));
-
-dropZone.addEventListener('dragover', (event) => {
-  event.preventDefault();
-  dropZone.classList.add('dragging');
-});
-dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragging'));
-dropZone.addEventListener('drop', (event) => {
-  event.preventDefault();
-  dropZone.classList.remove('dragging');
-  setFile(event.dataTransfer.files[0]);
-});
-dropZone.addEventListener('keydown', (event) => {
-  if (event.key === 'Enter' || event.key === ' ') {
-    event.preventDefault();
-    fileInput.click();
-  }
-});
-
-processButton.addEventListener('click', async () => {
-  if (!selectedFile) return;
-
-  processButton.disabled = true;
-  status.textContent = 'Procesando archivo...';
-  status.className = 'status';
-  resultCard.classList.add('hidden');
-
-  try {
-    const formData = new FormData();
-    formData.append('file', selectedFile);
-    const response = await fetch('/api/process', { method: 'POST', body: formData });
-    const data = await response.json();
-    if (!response.ok || !data.ok) {
-      throw new Error(data.error || 'No fue posible procesar el archivo.');
-    }
-
-    const summary = data.summary;
-    document.getElementById('recordsCount').textContent =
-      Number(summary.processed || 0) + Number(summary.not_found || 0) + Number(summary.already_internal || 0);
-    document.getElementById('processedCount').textContent = summary.processed;
-    document.getElementById('missingCount').textContent = summary.not_found;
-    document.getElementById('generatedFile').textContent = data.filename || '—';
-    updateCatalogTotal(data.catalog_total);
-
-    const files = summary.output_files || [];
-    outputFiles.textContent = files.length
-      ? `Archivos generados: ${files.join(', ')} → ${data.filename}`
-      : data.filename;
-
-    issuesBody.innerHTML = '';
-    if (summary.issues && summary.issues.length) {
-      for (const issue of summary.issues) {
-        const row = document.createElement('tr');
-        for (const value of [issue.sheet, issue.row, issue.value]) {
-          const cell = document.createElement('td');
-          cell.textContent = value;
-          row.appendChild(cell);
-        }
-        issuesBody.appendChild(row);
-      }
-      issuesSection.classList.remove('hidden');
-    } else {
-      issuesSection.classList.add('hidden');
-    }
-
-    downloadButton.href = data.downloadUrl;
-    downloadButton.setAttribute('download', data.filename);
-    downloadButton.textContent = data.filename.toLowerCase().endsWith('.zip')
-      ? 'Descargar ZIP'
-      : 'Descargar CSV';
-
-    status.textContent = summary.not_found
-      ? `Archivo procesado correctamente. ${summary.not_found} referencia(s) no encontrada(s).`
-      : 'Archivo procesado correctamente.';
-    status.className = summary.not_found ? 'status warning' : 'status success';
-    resultCard.classList.remove('hidden');
-    resultCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    if (!catalogPanel.classList.contains('hidden')) {
-      await loadCatalog();
-    }
-  } catch (error) {
-    status.textContent = error.message;
-    status.className = 'status error';
-  } finally {
-    processButton.disabled = false;
-  }
-});
-
-toggleCatalogButton.addEventListener('click', async () => {
-  const opening = catalogPanel.classList.contains('hidden');
-  catalogPanel.classList.toggle('hidden');
-  toggleCatalogButton.textContent = opening ? 'Ocultar catálogo' : 'Administrar catálogo';
-  if (opening) {
-    catalogListStatus.textContent = '';
-    try {
-      await loadCatalog();
-    } catch (error) {
-      catalogListStatus.textContent = error.message;
-      catalogListStatus.className = 'status error';
-    }
-  }
-});
-
-catalogForm.addEventListener('submit', async (event) => {
-  event.preventDefault();
-  catalogFormStatus.textContent = 'Guardando...';
-  catalogFormStatus.className = 'status';
-  try {
-    const response = await fetch('/api/catalog', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        internal_id: document.getElementById('newInternalId').value,
-        ref: document.getElementById('newRef').value,
-        name: document.getElementById('newName').value,
-      }),
-    });
-    const data = await response.json();
-    if (!response.ok || !data.ok) {
-      throw new Error(data.error || 'No fue posible agregar el artículo.');
-    }
-    updateCatalogTotal(data.catalog_total);
-    catalogForm.reset();
-    catalogFormStatus.textContent = data.message || 'Artículo agregado.';
-    catalogFormStatus.className = 'status success';
-    catalogPage = 1;
-    await loadCatalog();
-  } catch (error) {
-    catalogFormStatus.textContent = error.message;
-    catalogFormStatus.className = 'status error';
-  }
-});
 
 catalogSearch.addEventListener('input', () => {
   clearTimeout(searchTimer);
   searchTimer = setTimeout(async () => {
     catalogPage = 1;
-    try {
-      await loadCatalog();
-    } catch (error) {
+    try { await loadCatalog(); }
+    catch (error) {
       catalogListStatus.textContent = error.message;
       catalogListStatus.className = 'status error';
     }
@@ -256,7 +1401,192 @@ catalogNext.addEventListener('click', async () => {
   await loadCatalog();
 });
 
+catalogForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  catalogFormStatus.textContent = 'Guardando...';
+  catalogFormStatus.className = 'status';
+  try {
+    const response = await fetch('/api/catalog', {
+      method: 'POST',
+      headers: adminHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({
+        internal_id: document.getElementById('newInternalId').value,
+        ref: document.getElementById('newRef').value,
+        name: document.getElementById('newName').value,
+      }),
+    });
+    const data = await response.json();
+    if (!response.ok || !data.ok) throw new Error(data.error || 'No fue posible agregar el artículo.');
+    updateCatalogTotal(data.catalog_total, data.catalog_updated_at);
+    catalogForm.reset();
+    catalogFormStatus.textContent = data.message || 'Artículo agregado.';
+    catalogFormStatus.className = 'status success';
+    catalogPage = 1;
+    await loadCatalog();
+  } catch (error) {
+    catalogFormStatus.textContent = error.message;
+    catalogFormStatus.className = 'status error';
+  }
+});
+
+function setImportFile(file) {
+  if (!file) return;
+  const lower = file.name.toLowerCase();
+  if (!(lower.endsWith('.xlsx') || lower.endsWith('.csv'))) {
+    selectedImportFile = null;
+    importFileName.textContent = '';
+    importPreviewButton.disabled = true;
+    importConfirmButton.disabled = true;
+    importStatus.textContent = 'Selecciona un archivo .xlsx o .csv.';
+    importStatus.className = 'status error';
+    return;
+  }
+  selectedImportFile = file;
+  importToken = null;
+  importConfirmButton.disabled = true;
+  importPreviewCard.classList.add('hidden');
+  importErrorsButton.classList.add('hidden');
+  importFileName.textContent = `${file.name} · ${(file.size / 1024 / 1024).toFixed(2)} MB`;
+  importPreviewButton.disabled = false;
+  importStatus.textContent = '';
+}
+
+function bindDropZone(zone, input, onFile) {
+  zone.addEventListener('dragover', (event) => {
+    event.preventDefault();
+    zone.classList.add('dragging');
+  });
+  zone.addEventListener('dragleave', () => zone.classList.remove('dragging'));
+  zone.addEventListener('drop', (event) => {
+    event.preventDefault();
+    zone.classList.remove('dragging');
+    onFile(event.dataTransfer.files[0]);
+  });
+  zone.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      input.click();
+    }
+  });
+}
+
+importSelectButton.addEventListener('click', () => importFileInput.click());
+importFileInput.addEventListener('change', () => setImportFile(importFileInput.files[0]));
+bindDropZone(importDropZone, importFileInput, setImportFile);
+
+function renderImportPreview(data) {
+  document.getElementById('importAnalyzed').textContent = data.analyzed_rows || 0;
+  document.getElementById('importNew').textContent = data.new_count || 0;
+  document.getElementById('importUpdate').textContent = data.update_count || 0;
+  document.getElementById('importUnchanged').textContent = data.unchanged_count || 0;
+  document.getElementById('importConflicts').textContent = data.conflict_count || 0;
+  document.getElementById('importInvalid').textContent = data.invalid_count || 0;
+
+  const samplesBody = document.getElementById('importSamplesBody');
+  samplesBody.innerHTML = '';
+  const samples = data.samples || [];
+  const samplesSection = document.getElementById('importSamplesSection');
+  if (samples.length) {
+    for (const sample of samples) {
+      const tr = document.createElement('tr');
+      const before = sample.before ? `${sample.before.ref || ''} / ${sample.before.name || ''}` : '—';
+      const after = `${sample.after.ref || ''} / ${sample.after.name || ''}`;
+      for (const value of [sample.kind, sample.internal_id, before, after]) {
+        const td = document.createElement('td');
+        td.textContent = value;
+        tr.appendChild(td);
+      }
+      samplesBody.appendChild(tr);
+    }
+    samplesSection.classList.remove('hidden');
+  } else samplesSection.classList.add('hidden');
+
+  const conflictsBody = document.getElementById('importConflictsBody');
+  conflictsBody.innerHTML = '';
+  const conflicts = [...(data.conflicts || []), ...(data.invalid || [])];
+  const conflictsSection = document.getElementById('importConflictsSection');
+  if (conflicts.length) {
+    for (const item of conflicts) {
+      const tr = document.createElement('tr');
+      for (const value of [item.sheet, item.row, item.internal_id, item.ref, item.reason]) {
+        const td = document.createElement('td');
+        td.textContent = value;
+        tr.appendChild(td);
+      }
+      conflictsBody.appendChild(tr);
+    }
+    conflictsSection.classList.remove('hidden');
+  } else conflictsSection.classList.add('hidden');
+
+  importPreviewCard.classList.remove('hidden');
+}
+
+importPreviewButton.addEventListener('click', async () => {
+  if (!selectedImportFile) return;
+  importPreviewButton.disabled = true;
+  importConfirmButton.disabled = true;
+  importStatus.textContent = 'Analizando inventario...';
+  importStatus.className = 'status';
+  try {
+    const formData = new FormData();
+    formData.append('file', selectedImportFile);
+    const response = await fetch('/api/catalog/import/preview', {
+      method: 'POST',
+      headers: adminHeaders(),
+      body: formData,
+    });
+    const data = await response.json();
+    if (!response.ok || !data.ok) throw new Error(data.error || 'No fue posible analizar el inventario.');
+    importToken = data.token;
+    updateCatalogTotal(data.catalog_total, data.catalog_updated_at);
+    renderImportPreview(data);
+    importConfirmButton.disabled = !data.apply_ready;
+    if (data.errorsDownloadUrl && (data.conflict_count || data.invalid_count)) {
+      importErrorsButton.href = data.errorsDownloadUrl;
+      importErrorsButton.classList.remove('hidden');
+    } else importErrorsButton.classList.add('hidden');
+    importStatus.textContent = data.apply_ready
+      ? 'Vista previa lista. Confirma para aplicar.'
+      : 'Vista previa lista. No hay cambios aplicables.';
+    importStatus.className = data.apply_ready ? 'status success' : 'status warning';
+  } catch (error) {
+    importStatus.textContent = error.message;
+    importStatus.className = 'status error';
+  } finally {
+    importPreviewButton.disabled = false;
+  }
+});
+
+importConfirmButton.addEventListener('click', async () => {
+  if (!importToken) return;
+  importConfirmButton.disabled = true;
+  importStatus.textContent = 'Aplicando actualización...';
+  importStatus.className = 'status';
+  try {
+    const response = await fetch('/api/catalog/import/confirm', {
+      method: 'POST',
+      headers: adminHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ token: importToken }),
+    });
+    const data = await response.json();
+    if (!response.ok || !data.ok) throw new Error(data.error || 'No fue posible confirmar.');
+    updateCatalogTotal(data.catalog_total, data.catalog_updated_at);
+    importToken = null;
+    importStatus.textContent =
+      `${data.message} Nuevos: ${data.applied_new}. Actualizados: ${data.applied_update}.`
+      + (data.backup ? ` Respaldo: ${data.backup}.` : '');
+    importStatus.className = 'status success';
+    await loadCatalog();
+  } catch (error) {
+    importStatus.textContent = error.message;
+    importStatus.className = 'status error';
+    importConfirmButton.disabled = false;
+  }
+});
+
 fetch('/api/health')
-  .then((response) => response.json())
-  .then((data) => updateCatalogTotal(data.catalog_total || 0))
-  .catch(() => updateCatalogTotal(0));
+  .then((r) => r.json())
+  .then((data) => updateCatalogTotal(data.catalog_total || 0, data.catalog_updated_at))
+  .catch(() => updateCatalogTotal(0, ''));
+
+initTemplate().catch((error) => setStatus(error.message, 'error'));
