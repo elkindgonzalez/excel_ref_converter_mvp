@@ -404,18 +404,43 @@ function buildDateCell(row, index, col) {
     };
     input.value = nextValue;
     picker.value = Ops.purchaseDateToIso(nextValue);
-    syncError(nextValue);
+    // En blur: solo marcar error si hay texto y no es fecha válida completa.
+    if (!nextValue || Ops.isValidPurchaseDate(nextValue)) {
+      syncError(nextValue);
+    } else {
+      syncError(nextValue);
+    }
+  }
+
+  function applyDateMaskFromInput() {
+    const caret = input.selectionStart;
+    const masked = Ops.maskPurchaseDateInput(input.value, caret);
+    input.value = masked.value;
+    try {
+      input.setSelectionRange(masked.cursor, masked.cursor);
+    } catch (_err) {
+      // Algunos inputs search/date pueden ignorar selectionRange.
+    }
+    rows[index] = {
+      ...rows[index],
+      data: { ...rows[index].data, [col]: masked.value },
+    };
+    picker.value = Ops.purchaseDateToIso(masked.value);
+    // Mientras se escribe (parcial), no gritar error; sí si ya hay 8 dígitos inválidos.
+    const digits = Ops.dateDigitsOnly(masked.value);
+    if (!digits.length) {
+      syncError('');
+    } else if (digits.length < 8) {
+      input.classList.remove('invalid');
+      err.hidden = true;
+      err.textContent = '';
+    } else {
+      syncError(masked.value);
+    }
   }
 
   wireCellInput(input, row, index, col, {
-    onInput: () => {
-      rows[index] = {
-        ...rows[index],
-        data: { ...rows[index].data, [col]: input.value },
-      };
-      picker.value = Ops.purchaseDateToIso(input.value);
-      syncError(input.value);
-    },
+    onInput: () => applyDateMaskFromInput(),
   });
   input.addEventListener('blur', () => {
     if (!String(input.value || '').trim()) {

@@ -162,9 +162,13 @@ class PurchaseFormTests(unittest.TestCase):
         self.assertFalse(app.is_valid_purchase_date("29/02/2023"))
         self.assertFalse(app.is_valid_purchase_date("31/04/2026"))
         self.assertFalse(app.is_valid_purchase_date("00/01/2026"))
-        self.assertFalse(app.is_valid_purchase_date("15-10-2026"))
-        self.assertFalse(app.is_valid_purchase_date("2026-09-30"))
+        self.assertFalse(app.is_valid_purchase_date("2026-09-30"))  # ISO year-first
         self.assertFalse(app.is_valid_purchase_date("32/01/2026"))
+        self.assertTrue(app.is_valid_purchase_date("15-10-2026"))  # separadores alternativos → válido
+        # Máscara de 8 dígitos continuos
+        self.assertEqual(app.mask_purchase_date_digits("11102026"), "11/10/2026")
+        self.assertTrue(app.is_valid_purchase_date("11102026"))
+        self.assertFalse(app.is_valid_purchase_date("31022026"))
 
         ok_data, _, ok_errors = app.export_purchase_csv([sample_row(**{"FECHA DE AJUSTE": "30/09/2026"})])
         self.assertEqual(ok_errors, [])
@@ -172,6 +176,13 @@ class PurchaseFormTests(unittest.TestCase):
         fecha_idx = app.PURCHASE_HEADERS.index("FECHA DE AJUSTE")
         self.assertEqual(parsed[1][fecha_idx], "30/09/2026")
         self.assertNotIn("2026-09-30", ok_data.decode("utf-8-sig"))
+
+        digits_data, _, digits_errors = app.export_purchase_csv([
+            sample_row(**{"FECHA DE AJUSTE": "11102026"}),
+        ])
+        self.assertEqual(digits_errors, [])
+        digits_parsed = list(csv.reader(io.StringIO(digits_data.decode("utf-8-sig")), delimiter=";"))
+        self.assertEqual(digits_parsed[1][fecha_idx], "11/10/2026")
 
         _bad, _fn, bad_errors = app.export_purchase_csv([sample_row(**{"FECHA DE AJUSTE": "31/02/2026"})])
         self.assertTrue(any(e.get("field") == "FECHA DE AJUSTE" for e in bad_errors))

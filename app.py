@@ -772,12 +772,25 @@ def _cell_str(value: object) -> str:
 
 
 def parse_purchase_date(value: str) -> Optional[datetime]:
-    """Parse DD/MM/AAAA and reject nonexistent calendar dates (incl. leap years)."""
+    """Parse DD/MM/AAAA, 8 continuous digits, or D/M/AAAA with /.- separators.
+
+    Rejects ISO year-first (YYYY-MM-DD) and nonexistent calendar dates.
+    """
     text = (value or "").strip()
     match = PURCHASE_DATE_RE.fullmatch(text)
+    if not match and re.fullmatch(r"\d{8}", text):
+        text = f"{text[0:2]}/{text[2:4]}/{text[4:8]}"
+        match = PURCHASE_DATE_RE.fullmatch(text)
     if not match:
-        return None
-    day, month, year = int(match.group(1)), int(match.group(2)), int(match.group(3))
+        # Reject ISO year-first explicitly.
+        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", text):
+            return None
+        loose = re.fullmatch(r"(\d{1,2})[/\-.](\d{1,2})[/\-.](\d{4})", text)
+        if not loose:
+            return None
+        day, month, year = int(loose.group(1)), int(loose.group(2)), int(loose.group(3))
+    else:
+        day, month, year = int(match.group(1)), int(match.group(2)), int(match.group(3))
     try:
         return datetime(year, month, day)
     except ValueError:
@@ -791,6 +804,16 @@ def is_valid_purchase_date(value: str) -> bool:
 def format_purchase_date(value: datetime) -> str:
     """Always emit DD/MM/AAAA for export/display."""
     return value.strftime("%d/%m/%Y")
+
+
+def mask_purchase_date_digits(digits: str) -> str:
+    """Progressive UI/export mask helper: 11102026 → 11/10/2026."""
+    d = re.sub(r"\D", "", digits or "")[:8]
+    if len(d) <= 2:
+        return d
+    if len(d) <= 4:
+        return f"{d[:2]}/{d[2:]}"
+    return f"{d[:2]}/{d[2:4]}/{d[4:]}"
 
 
 def validate_purchase_rows(

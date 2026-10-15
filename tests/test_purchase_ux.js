@@ -175,7 +175,7 @@ for (const w of [1920, 1440, 1366, 1024]) {
   }
 }
 
-// Date validation (FECHA DE AJUSTE only)
+// Date validation + mask (FECHA DE AJUSTE only)
 assert.deepStrictEqual(Ops.DATE_FIELDS, ["FECHA DE AJUSTE"]);
 assert.strictEqual(Ops.DATE_FORMAT, "DD/MM/AAAA");
 assert.ok(Ops.isDateField("FECHA DE AJUSTE"));
@@ -190,15 +190,47 @@ assert.strictEqual(Ops.purchaseDateToIso("30/09/2026"), "2026-09-30");
 assert.strictEqual(Ops.coercePurchaseDateInput("2026-09-30").value, "30/09/2026");
 assert.strictEqual(Ops.coercePurchaseDateInput("31/02/2026").ok, false);
 
+// Escritura continua sin barras
+assert.strictEqual(Ops.maskPurchaseDateDigits("11102026"), "11/10/2026");
+assert.strictEqual(Ops.maskPurchaseDateDigits("11"), "11");
+assert.strictEqual(Ops.maskPurchaseDateDigits("1110"), "11/10");
+assert.strictEqual(Ops.maskPurchaseDateDigits("111020"), "11/10/20");
+assert.strictEqual(Ops.coercePurchaseDateInput("11102026").value, "11/10/2026");
+assert.ok(Ops.coercePurchaseDateInput("11102026").ok);
+assert.ok(Ops.isValidPurchaseDate(Ops.coercePurchaseDateInput("11102026").value));
+assert.strictEqual(Ops.coercePurchaseDateInput("31022026").ok, false); // 31/02 inválido
+assert.strictEqual(Ops.coercePurchaseDateInput("29022024").value, "29/02/2024");
+assert.ok(Ops.coercePurchaseDateInput("29022024").ok);
+assert.strictEqual(Ops.coercePurchaseDateInput("29022023").ok, false);
+
+// Cursor coherente al enmascarar
+const typed = Ops.maskPurchaseDateInput("11102026", 8);
+assert.strictEqual(typed.value, "11/10/2026");
+assert.strictEqual(typed.cursor, 10);
+const mid = Ops.maskPurchaseDateInput("11/102026", 5); // after "11/10"
+assert.strictEqual(mid.value, "11/10/2026");
+assert.strictEqual(mid.cursor, 5);
+const partial = Ops.maskPurchaseDateInput("1110", 4);
+assert.strictEqual(partial.value, "11/10");
+assert.strictEqual(partial.cursor, 5);
+// Borrado: quitar último dígito de fecha completa
+const deleted = Ops.maskPurchaseDateInput("11/10/202", 9);
+assert.strictEqual(deleted.value, "11/10/202");
+assert.ok(deleted.cursor <= deleted.value.length);
+// Edición parcial con barras ya presentes
+assert.strictEqual(Ops.maskPurchaseDateInput("11/10/2026", 10).value, "11/10/2026");
+assert.strictEqual(Ops.coercePurchaseDateInput("11/10/2026").value, "11/10/2026");
+
 const datePaste = Ops.applyPaste(
   [baseRow(1)],
   0,
   "FECHA DE AJUSTE",
-  [["2026-10-15"], ["31/02/2026"]],
+  [["2026-10-15"], ["31/02/2026"], ["11102026"]],
   HEADERS,
 );
 assert.strictEqual(datePaste.rows[0].data["FECHA DE AJUSTE"], "15/10/2026");
 assert.strictEqual(datePaste.rows[1].data["FECHA DE AJUSTE"], "31/02/2026");
+assert.strictEqual(datePaste.rows[2].data["FECHA DE AJUSTE"], "11/10/2026");
 assert.ok(datePaste.errors.some((e) => e.field === "FECHA DE AJUSTE"));
 
 let filled = [

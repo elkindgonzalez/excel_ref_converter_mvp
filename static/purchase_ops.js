@@ -148,9 +148,13 @@
         updated.data[ARTICLE_NAME] = prev.data[ARTICLE_NAME] || "";
       }
     } else {
+      let value = prev.data[field] || "";
+      if (DATE_FIELDS.indexOf(field) !== -1) {
+        value = coercePurchaseDateInput(value).value;
+      }
       updated = {
         id: current.id,
-        data: { ...current.data, [field]: prev.data[field] || "" },
+        data: { ...current.data, [field]: value },
         selectedArticle: cloneArticle(current.selectedArticle),
       };
     }
@@ -166,6 +170,10 @@
     const start = Math.min(fromIndex, toIndex);
     const end = Math.max(fromIndex, toIndex);
     const source = rows[fromIndex];
+    let sourceValue = source.data[field] || "";
+    if (DATE_FIELDS.indexOf(field) !== -1) {
+      sourceValue = coercePurchaseDateInput(sourceValue).value;
+    }
     const next = rows.slice();
     for (let i = start; i <= end; i += 1) {
       if (i === fromIndex) continue;
@@ -178,7 +186,7 @@
       } else {
         next[i] = {
           id: next[i].id,
-          data: { ...next[i].data, [field]: source.data[field] || "" },
+          data: { ...next[i].data, [field]: DATE_FIELDS.indexOf(field) !== -1 ? sourceValue : (source.data[field] || "") },
           selectedArticle: cloneArticle(next[i].selectedArticle),
         };
       }
@@ -241,6 +249,48 @@
     return `${pad2(day)}/${pad2(month)}/${String(year).padStart(4, "0")}`;
   }
 
+  function dateDigitsOnly(value) {
+    return String(value == null ? "" : value).replace(/\D/g, "").slice(0, 8);
+  }
+
+  /** Progressive mask: 11102026 → 11/10/2026 (also 11 → 11, 1110 → 11/10). */
+  function maskPurchaseDateDigits(digits) {
+    const d = dateDigitsOnly(digits);
+    if (!d.length) return "";
+    if (d.length <= 2) return d;
+    if (d.length <= 4) return `${d.slice(0, 2)}/${d.slice(2)}`;
+    return `${d.slice(0, 2)}/${d.slice(2, 4)}/${d.slice(4)}`;
+  }
+
+  /**
+   * Apply DD/MM/AAAA mask and map caret after the same number of digits.
+   * cursor = selectionStart in the raw (pre-mask) value; null → end.
+   */
+  function maskPurchaseDateInput(raw, cursor) {
+    const text = String(raw == null ? "" : raw);
+    const safeCursor = cursor == null ? text.length : Math.max(0, Math.min(cursor, text.length));
+    const digitsBefore = dateDigitsOnly(text.slice(0, safeCursor)).length;
+    const digits = dateDigitsOnly(text);
+    const masked = maskPurchaseDateDigits(digits);
+    let nextCursor = masked.length;
+    if (digitsBefore <= 0) {
+      nextCursor = 0;
+    } else {
+      let seen = 0;
+      nextCursor = masked.length;
+      for (let i = 0; i < masked.length; i += 1) {
+        if (/\d/.test(masked[i])) {
+          seen += 1;
+          if (seen === digitsBefore) {
+            nextCursor = i + 1;
+            break;
+          }
+        }
+      }
+    }
+    return { value: masked, cursor: nextCursor, digits };
+  }
+
   function isValidPurchaseDate(value) {
     const text = String(value || "").trim();
     const match = DATE_RE.exec(text);
@@ -272,13 +322,13 @@
   }
 
   /**
-   * Normaliza entradas de fecha a DD/MM/AAAA cuando es posible (ISO, D/M/AAAA).
-   * Si no se puede normalizar a una fecha existente, devuelve el texto limpio
-   * para que la UI muestre el error de validación.
+   * Normaliza entradas a DD/MM/AAAA: máscara de 8 dígitos, barras, ISO, D/M/AAAA.
+   * Fechas incompletas quedan enmascaradas (ok=false hasta ser calendario-válidas).
    */
   function coercePurchaseDateInput(raw) {
     const text = String(raw == null ? "" : raw).trim();
     if (!text) return { value: "", ok: true, empty: true };
+
     if (isValidPurchaseDate(text)) {
       const m = DATE_RE.exec(text);
       return {
@@ -287,15 +337,32 @@
         empty: false,
       };
     }
+
     const fromIso = isoToPurchaseDate(text);
     if (fromIso) return { value: fromIso, ok: true, empty: false };
+
     const loose = /^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{4})$/.exec(text);
     if (loose) {
       const formatted = formatPurchaseDate(Number(loose[1]), Number(loose[2]), Number(loose[3]));
       if (isValidPurchaseDate(formatted)) {
         return { value: formatted, ok: true, empty: false };
       }
+      return { value: formatted, ok: false, empty: false, message: DATE_ERROR };
     }
+
+    const digits = dateDigitsOnly(text);
+    if (digits.length) {
+      const masked = maskPurchaseDateDigits(digits);
+      if (digits.length === 8 && isValidPurchaseDate(masked)) {
+        return { value: masked, ok: true, empty: false };
+      }
+      if (digits.length === 8) {
+        return { value: masked, ok: false, empty: false, message: DATE_ERROR };
+      }
+      // Escritura parcial enmascarada (ej. 1110 → 11/10): aún no válida.
+      return { value: masked, ok: false, empty: false, incomplete: true, message: DATE_ERROR };
+    }
+
     return { value: text, ok: false, empty: false, message: DATE_ERROR };
   }
 
@@ -463,6 +530,9 @@
     isValidPurchaseDate,
     purchaseDateToIso,
     isoToPurchaseDate,
+    dateDigitsOnly,
+    maskPurchaseDateDigits,
+    maskPurchaseDateInput,
     coercePurchaseDateInput,
     validateDateFields,
     formatPurchaseDate,
