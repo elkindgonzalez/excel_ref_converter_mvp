@@ -14,6 +14,11 @@
   const ARTICLE_ID = "ID INTERNO ARTICULO";
   const ARTICLE_NAME = "NOMBRE DE ARTICULO";
   const ARTICLE_COL = "__ARTICLE__";
+  const DATE_FIELDS = ["FECHA DE AJUSTE"];
+  const DATE_FORMAT = "DD/MM/AAAA";
+  const DATE_RE = /^(\d{2})\/(\d{2})\/(\d{4})$/;
+  const DATE_ERROR =
+    "Fecha inválida. Usa DD/MM/AAAA (ej. 30/09/2026) y una fecha existente.";
 
   const SHORT_LABELS = {
     "ID SUBSIDIARIA": "Subsidiaria",
@@ -34,39 +39,37 @@
 
   /** Default column width shares (percent of table). Actions separate. */
   const DEFAULT_WIDTH_SHARES = {
-    [ARTICLE_COL]: 11,
     "ID SUBSIDIARIA": 5,
     iDENTIFICAR: 8,
-    "FECHA DE AJUSTE": 6,
+    "FECHA DE AJUSTE": 8,
     "TIPO DE AJUSTE": 4,
     "UBICACIÓN DE AJUSTE": 5,
     NOTA: 9,
+    "ID INTERNO ARTICULO": 11,
+    "NOMBRE DE ARTICULO": 15,
     "AJUSTE DE CANTIDAD": 5,
     ESTADO: 6,
     "CENTRO DE COSTOS": 5,
     "SUBCENTRO DE COSTOS": 5,
     AREA: 5,
     SOLICITANTE: 6,
-    "ID INTERNO ARTICULO": 5,
-    "NOMBRE DE ARTICULO": 15,
   };
 
   const MIN_COL_PX = {
-    [ARTICLE_COL]: 120,
     "ID SUBSIDIARIA": 56,
     iDENTIFICAR: 80,
-    "FECHA DE AJUSTE": 78,
+    "FECHA DE AJUSTE": 110,
     "TIPO DE AJUSTE": 48,
     "UBICACIÓN DE AJUSTE": 56,
     NOTA: 80,
+    "ID INTERNO ARTICULO": 120,
+    "NOMBRE DE ARTICULO": 140,
     "AJUSTE DE CANTIDAD": 56,
     ESTADO: 64,
     "CENTRO DE COSTOS": 56,
     "SUBCENTRO DE COSTOS": 56,
     AREA: 56,
     SOLICITANTE: 72,
-    "ID INTERNO ARTICULO": 64,
-    "NOMBRE DE ARTICULO": 140,
   };
 
   function cloneArticle(article) {
@@ -210,14 +213,114 @@
     return lines.map((line) => line.split("\t"));
   }
 
+  /**
+   * Orden visual = orden de plantilla (14 columnas, sin columnas auxiliares).
+   * Única fuente de verdad compartida con exportación CSV.
+   */
   function visibleColumns(headers) {
-    // Artículo (búsqueda) es helper UI; las 14 columnas siguen el orden exacto de la plantilla.
-    return [ARTICLE_COL].concat(headers);
+    return headers.slice();
   }
 
-  /** Las 14 columnas de plantilla en orden de contrato (sin el helper de búsqueda). */
   function plantillaColumns(headers) {
     return headers.slice();
+  }
+
+  function isArticleSearchField(field) {
+    return field === ARTICLE_ID || field === ARTICLE_COL;
+  }
+
+  function isDateField(field) {
+    return DATE_FIELDS.indexOf(field) !== -1;
+  }
+
+  function pad2(n) {
+    return String(n).padStart(2, "0");
+  }
+
+  function formatPurchaseDate(day, month, year) {
+    return `${pad2(day)}/${pad2(month)}/${String(year).padStart(4, "0")}`;
+  }
+
+  function isValidPurchaseDate(value) {
+    const text = String(value || "").trim();
+    const match = DATE_RE.exec(text);
+    if (!match) return false;
+    const day = Number(match[1]);
+    const month = Number(match[2]);
+    const year = Number(match[3]);
+    if (year < 1 || month < 1 || month > 12 || day < 1) return false;
+    const dt = new Date(year, month - 1, day);
+    return (
+      dt.getFullYear() === year
+      && dt.getMonth() === month - 1
+      && dt.getDate() === day
+    );
+  }
+
+  function purchaseDateToIso(value) {
+    if (!isValidPurchaseDate(value)) return "";
+    const match = DATE_RE.exec(String(value).trim());
+    return `${match[3]}-${match[2]}-${match[1]}`;
+  }
+
+  function isoToPurchaseDate(iso) {
+    const text = String(iso || "").trim();
+    const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text);
+    if (!match) return "";
+    const formatted = formatPurchaseDate(Number(match[3]), Number(match[2]), Number(match[1]));
+    return isValidPurchaseDate(formatted) ? formatted : "";
+  }
+
+  /**
+   * Normaliza entradas de fecha a DD/MM/AAAA cuando es posible (ISO, D/M/AAAA).
+   * Si no se puede normalizar a una fecha existente, devuelve el texto limpio
+   * para que la UI muestre el error de validación.
+   */
+  function coercePurchaseDateInput(raw) {
+    const text = String(raw == null ? "" : raw).trim();
+    if (!text) return { value: "", ok: true, empty: true };
+    if (isValidPurchaseDate(text)) {
+      const m = DATE_RE.exec(text);
+      return {
+        value: formatPurchaseDate(Number(m[1]), Number(m[2]), Number(m[3])),
+        ok: true,
+        empty: false,
+      };
+    }
+    const fromIso = isoToPurchaseDate(text);
+    if (fromIso) return { value: fromIso, ok: true, empty: false };
+    const loose = /^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{4})$/.exec(text);
+    if (loose) {
+      const formatted = formatPurchaseDate(Number(loose[1]), Number(loose[2]), Number(loose[3]));
+      if (isValidPurchaseDate(formatted)) {
+        return { value: formatted, ok: true, empty: false };
+      }
+    }
+    return { value: text, ok: false, empty: false, message: DATE_ERROR };
+  }
+
+  function validateDateFields(rows, requiredFields) {
+    const required = new Set(requiredFields || []);
+    const errors = [];
+    rows.forEach((row, index) => {
+      for (const field of DATE_FIELDS) {
+        const raw = (row.data && row.data[field]) || "";
+        if (!raw) {
+          if (required.has(field)) {
+            errors.push({
+              row: index + 1,
+              field,
+              message: `Campo obligatorio vacío: ${field}`,
+            });
+          }
+          continue;
+        }
+        if (!isValidPurchaseDate(raw)) {
+          errors.push({ row: index + 1, field, message: DATE_ERROR });
+        }
+      }
+    });
+    return errors;
   }
 
   function applyPaste(rows, startRow, startColKey, grid, headers) {
@@ -237,21 +340,35 @@
         const field = cols[colIndex + c];
         if (!field) continue;
         const value = grid[r][c];
-        if (field === ARTICLE_COL) {
-          // Paste into article search clears selection unless value matches id/ref pattern later resolved by UI.
+        if (isArticleSearchField(field)) {
+          // Búsqueda integrada en ID INTERNO: pegado inicia consulta, no fija ID sin selección.
           row = clearArticle(row);
           row = {
             ...row,
             data: { ...row.data },
             _articleQuery: value,
           };
-        } else if (field === ARTICLE_ID || field === ARTICLE_NAME) {
-          // Readonly fields: ignore direct paste to avoid inconsistency; report.
+        } else if (field === ARTICLE_NAME) {
           errors.push({
             row: targetIndex + 1,
             field,
-            message: "Pegado ignorado en campo de artículo derivado. Usa la búsqueda de artículo.",
+            message: "Pegado ignorado en nombre de artículo. Selecciona el artículo desde ID INTERNO ARTICULO.",
           });
+        } else if (isDateField(field)) {
+          const coerced = coercePurchaseDateInput(value);
+          row = {
+            id: row.id,
+            data: { ...row.data, [field]: coerced.value },
+            selectedArticle: cloneArticle(row.selectedArticle),
+            _articleQuery: row._articleQuery,
+          };
+          if (!coerced.empty && !coerced.ok) {
+            errors.push({
+              row: targetIndex + 1,
+              field,
+              message: coerced.message || DATE_ERROR,
+            });
+          }
         } else {
           row = {
             id: row.id,
@@ -302,7 +419,6 @@
   }
 
   function shortLabel(header) {
-    if (header === ARTICLE_COL) return "Artículo";
     return SHORT_LABELS[header] || header;
   }
 
@@ -323,6 +439,9 @@
     ARTICLE_ID,
     ARTICLE_NAME,
     ARTICLE_COL,
+    DATE_FIELDS,
+    DATE_FORMAT,
+    DATE_ERROR,
     SHORT_LABELS,
     DEFAULT_WIDTH_SHARES,
     MIN_COL_PX,
@@ -339,6 +458,14 @@
     parseClipboardTSV,
     visibleColumns,
     plantillaColumns,
+    isArticleSearchField,
+    isDateField,
+    isValidPurchaseDate,
+    purchaseDateToIso,
+    isoToPurchaseDate,
+    coercePurchaseDateInput,
+    validateDateFields,
+    formatPurchaseDate,
     applyPaste,
     defaultColumnWidthsPx,
     resizeColumn,

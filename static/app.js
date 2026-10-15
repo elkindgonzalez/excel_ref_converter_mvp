@@ -13,10 +13,15 @@ const purchaseScroll = document.getElementById('purchaseScroll');
 const addRowButton = document.getElementById('addRowButton');
 const fillDownButton = document.getElementById('fillDownButton');
 const resetWidthsButton = document.getElementById('resetWidthsButton');
+const previewCsvButton = document.getElementById('previewCsvButton');
 const downloadButton = document.getElementById('downloadButton');
 const createStatus = document.getElementById('createStatus');
 const createErrors = document.getElementById('createErrors');
 const createErrorsBody = document.getElementById('createErrorsBody');
+const csvPreviewPanel = document.getElementById('csvPreviewPanel');
+const csvPreviewHead = document.getElementById('csvPreviewHead');
+const csvPreviewBody = document.getElementById('csvPreviewBody');
+const csvPreviewStatus = document.getElementById('csvPreviewStatus');
 
 const catalogTotal = document.getElementById('catalogTotal');
 const catalogForm = document.getElementById('catalogForm');
@@ -52,7 +57,7 @@ let selectedImportFile = null;
 
 let columnWidths = {};
 let visibleCols = [];
-let active = { rowIndex: 0, colKey: Ops.ARTICLE_COL };
+let active = { rowIndex: 0, colKey: Ops.ARTICLE_ID };
 let selectionEndRow = null;
 let clipboardCells = null;
 let resizing = null;
@@ -145,10 +150,12 @@ function renderHead() {
   for (const col of visibleCols) {
     const th = document.createElement('th');
     th.dataset.col = col;
-    th.title = col === Ops.ARTICLE_COL ? 'Búsqueda de artículo' : col;
+    th.title = col === Ops.ARTICLE_ID
+      ? `${col} — busca por Ref, ID o nombre`
+      : col;
     const label = document.createElement('span');
     label.className = 'th-label';
-    const required = col !== Ops.ARTICLE_COL && (template.required_fields || []).includes(col);
+    const required = (template.required_fields || []).includes(col);
     label.textContent = required ? `${Ops.shortLabel(col)} *` : Ops.shortLabel(col);
     th.appendChild(label);
     const handle = document.createElement('span');
@@ -284,37 +291,12 @@ function buildCell(row, index, col) {
   td.dataset.rowIndex = String(index);
   td.className = 'grid-cell';
 
-  if (col === Ops.ARTICLE_COL) {
-    const wrap = document.createElement('div');
-    wrap.className = 'suggest-wrap';
-    const input = document.createElement('input');
-    input.type = 'search';
-    input.className = 'cell-input suggest-input';
-    input.placeholder = 'Buscar…';
-    input.autocomplete = 'off';
-    input.dataset.col = col;
-    input.dataset.rowIndex = String(index);
-    input.value = row.selectedArticle
-      ? `${row.selectedArticle.ref}`
-      : (row._articleQuery || '');
-    const list = document.createElement('div');
-    list.className = 'suggest-list hidden';
-    wireCellInput(input, row, index, col, {
-      onInput: () => {
-        rows[index] = Ops.clearArticle(rows[index]);
-        rows[index]._articleQuery = input.value;
-        const idInput = trField(index, Ops.ARTICLE_ID);
-        const nameInput = trField(index, Ops.ARTICLE_NAME);
-        if (idInput) idInput.value = '';
-        if (nameInput) nameInput.value = '';
-        scheduleSuggest(index, input, list);
-      },
-    });
-    wrap.appendChild(input);
-    wrap.appendChild(list);
-    td.appendChild(wrap);
+  if (col === Ops.ARTICLE_ID) {
+    td.appendChild(buildArticleIdCell(row, index));
+  } else if (Ops.isDateField(col)) {
+    td.appendChild(buildDateCell(row, index, col));
   } else {
-    const readonly = col === Ops.ARTICLE_ID || col === Ops.ARTICLE_NAME;
+    const readonly = col === Ops.ARTICLE_NAME;
     const input = document.createElement('input');
     input.type = 'text';
     input.className = readonly ? 'cell-input readonly' : 'cell-input';
@@ -363,6 +345,110 @@ function trField(rowIndex, col) {
   return purchaseBody.querySelector(
     `tr[data-row-index="${rowIndex}"] input[data-col="${CSS.escape(col)}"]`
   );
+}
+
+function buildDateCell(row, index, col) {
+  const wrap = document.createElement('div');
+  wrap.className = 'date-wrap';
+
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'cell-input date-input';
+  input.placeholder = Ops.DATE_FORMAT;
+  input.inputMode = 'numeric';
+  input.autocomplete = 'off';
+  input.dataset.col = col;
+  input.dataset.rowIndex = String(index);
+  input.title = `${col} (${Ops.DATE_FORMAT})`;
+  input.value = row.data[col] || '';
+
+  const picker = document.createElement('input');
+  picker.type = 'date';
+  picker.className = 'date-picker';
+  picker.title = 'Abrir calendario';
+  picker.setAttribute('aria-label', `Calendario ${col}`);
+  picker.value = Ops.purchaseDateToIso(row.data[col] || '');
+
+  const err = document.createElement('div');
+  err.className = 'cell-error';
+  err.hidden = true;
+
+  function syncError(raw) {
+    const text = String(raw || '').trim();
+    if (!text) {
+      input.classList.remove('invalid');
+      err.hidden = true;
+      err.textContent = '';
+      return true;
+    }
+    if (Ops.isValidPurchaseDate(text)) {
+      input.classList.remove('invalid');
+      err.hidden = true;
+      err.textContent = '';
+      return true;
+    }
+    input.classList.add('invalid');
+    err.hidden = false;
+    err.textContent = Ops.DATE_ERROR;
+    return false;
+  }
+
+  function commitDate(raw, { fromPicker = false } = {}) {
+    const coerced = fromPicker
+      ? { value: Ops.isoToPurchaseDate(raw), ok: !!Ops.isoToPurchaseDate(raw), empty: !raw }
+      : Ops.coercePurchaseDateInput(raw);
+    const nextValue = coerced.empty ? '' : coerced.value;
+    rows[index] = {
+      ...rows[index],
+      data: { ...rows[index].data, [col]: nextValue },
+    };
+    input.value = nextValue;
+    picker.value = Ops.purchaseDateToIso(nextValue);
+    syncError(nextValue);
+  }
+
+  wireCellInput(input, row, index, col, {
+    onInput: () => {
+      rows[index] = {
+        ...rows[index],
+        data: { ...rows[index].data, [col]: input.value },
+      };
+      picker.value = Ops.purchaseDateToIso(input.value);
+      syncError(input.value);
+    },
+  });
+  input.addEventListener('blur', () => {
+    if (!String(input.value || '').trim()) {
+      commitDate('');
+      return;
+    }
+    commitDate(input.value);
+  });
+  picker.addEventListener('change', () => {
+    commitDate(picker.value, { fromPicker: true });
+    focusCell(index, col, { select: false });
+  });
+  picker.addEventListener('click', (event) => event.stopPropagation());
+
+  syncError(input.value);
+  wrap.appendChild(input);
+  wrap.appendChild(picker);
+  wrap.appendChild(err);
+  return wrap;
+}
+
+function showErrorTable(errors) {
+  createErrorsBody.innerHTML = '';
+  for (const err of errors) {
+    const tr = document.createElement('tr');
+    for (const value of [err.row, err.field || '', err.message]) {
+      const td = document.createElement('td');
+      td.textContent = value;
+      tr.appendChild(td);
+    }
+    createErrorsBody.appendChild(tr);
+  }
+  createErrors.classList.remove('hidden');
 }
 
 function wireCellInput(input, _row, index, col, { onInput }) {
@@ -414,7 +500,7 @@ function focusCell(rowIndex, colKey, { select = true } = {}) {
 function duplicateAt(index) {
   const result = Ops.duplicateRow(rows, index, nextRowId());
   rows = result.rows;
-  active = { rowIndex: result.newIndex, colKey: visibleCols[0] || Ops.ARTICLE_COL };
+  active = { rowIndex: result.newIndex, colKey: firstEditableCol() };
   selectionEndRow = result.newIndex;
   renderRows({ focus: { rowIndex: result.newIndex, colKey: firstEditableCol() } });
   setStatus(`Registro duplicado (fila ${result.newIndex + 1}).`);
@@ -422,15 +508,103 @@ function duplicateAt(index) {
 
 function firstEditableCol() {
   for (const col of visibleCols) {
-    if (col !== Ops.ARTICLE_ID && col !== Ops.ARTICLE_NAME) return col;
+    if (col !== Ops.ARTICLE_NAME) return col;
   }
-  return Ops.ARTICLE_COL;
+  return Ops.ARTICLE_ID;
+}
+
+function buildArticleIdCell(row, index) {
+  const wrap = document.createElement('div');
+  wrap.className = 'suggest-wrap';
+  const input = document.createElement('input');
+  input.type = 'search';
+  input.className = 'cell-input suggest-input';
+  input.placeholder = 'Ref o ID…';
+  input.autocomplete = 'off';
+  input.dataset.col = Ops.ARTICLE_ID;
+  input.dataset.rowIndex = String(index);
+  input.title = 'ID INTERNO ARTICULO — escribe Ref o ID; Enter/Tab resuelve automáticamente';
+  input.value = row.selectedArticle
+    ? String(row.selectedArticle.internal_id || '')
+    : (row._articleQuery || row.data[Ops.ARTICLE_ID] || '');
+  const list = document.createElement('div');
+  list.className = 'suggest-list hidden';
+  const err = document.createElement('div');
+  err.className = 'cell-error';
+  err.hidden = true;
+  if (row._articleError) {
+    err.hidden = false;
+    err.textContent = row._articleError;
+    input.classList.add('invalid');
+  }
+  wireCellInput(input, row, index, Ops.ARTICLE_ID, {
+    onInput: () => {
+      rows[index] = Ops.clearArticle(rows[index]);
+      rows[index]._articleQuery = input.value;
+      delete rows[index]._articleError;
+      err.hidden = true;
+      input.classList.remove('invalid');
+      const nameInput = trField(index, Ops.ARTICLE_NAME);
+      if (nameInput) nameInput.value = '';
+      scheduleSuggest(index, input, list);
+    },
+  });
+  input.addEventListener('blur', () => {
+    // Delay so suggest mousedown/click can win.
+    setTimeout(() => {
+      if (document.activeElement === input) return;
+      if (list.contains(document.activeElement)) return;
+      resolveArticleAt(index, { focusNext: false }).catch(() => {});
+    }, 120);
+  });
+  wrap.appendChild(input);
+  wrap.appendChild(list);
+  wrap.appendChild(err);
+  return wrap;
 }
 
 function scheduleSuggest(rowIndex, input, list) {
   const prev = suggestTimers.get(rowIndex);
   if (prev) clearTimeout(prev);
-  suggestTimers.set(rowIndex, setTimeout(() => runSuggest(rowIndex, input, list), 180));
+  suggestTimers.set(rowIndex, setTimeout(() => runSuggest(rowIndex, input, list), 220));
+}
+
+function applyResolvedArticle(rowIndex, item, list) {
+  rows[rowIndex] = Ops.applyArticle(rows[rowIndex], item);
+  delete rows[rowIndex]._articleQuery;
+  delete rows[rowIndex]._articleError;
+  if (list) list.classList.add('hidden');
+}
+
+function renderSuggestChoices(rowIndex, input, list, items, { ambiguous = false } = {}) {
+  list.innerHTML = '';
+  if (ambiguous) {
+    const note = document.createElement('div');
+    note.className = 'suggest-empty';
+    note.textContent = 'Ambigüedad: elige Ref o ID interno.';
+    list.appendChild(note);
+  }
+  if (!items.length) {
+    list.innerHTML = '<div class="suggest-empty">Sin coincidencias</div>';
+    list.classList.remove('hidden');
+    return;
+  }
+  for (const item of items) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'suggest-item';
+    const tag = item.match ? `<span class="match-tag">${escapeHtml(item.match)}</span>` : '';
+    btn.innerHTML = `<strong>${escapeHtml(item.ref)}</strong> · ID ${escapeHtml(item.internal_id)}${tag}`
+      + `<span>${escapeHtml(item.name)}</span>`;
+    btn.addEventListener('mousedown', (event) => event.preventDefault());
+    btn.addEventListener('click', () => {
+      applyResolvedArticle(rowIndex, item, list);
+      renderRows({ focus: { rowIndex, colKey: 'AJUSTE DE CANTIDAD' } });
+      setStatus(`Artículo resuelto: ID ${item.internal_id}.`);
+    });
+    list.appendChild(btn);
+  }
+  list.classList.remove('hidden');
 }
 
 async function runSuggest(rowIndex, input, list) {
@@ -445,31 +619,75 @@ async function runSuggest(rowIndex, input, list) {
     const response = await fetch(`/api/catalog/suggest?${params}`);
     const data = await response.json();
     if (!response.ok || !data.ok) throw new Error(data.error || 'Búsqueda fallida');
-    list.innerHTML = '';
-    if (!data.items.length) {
-      list.innerHTML = '<div class="suggest-empty">Sin coincidencias</div>';
-      list.classList.remove('hidden');
-      return;
-    }
-    for (const item of data.items) {
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = 'suggest-item';
-      btn.innerHTML = `<strong>${escapeHtml(item.ref)}</strong> · ID ${escapeHtml(item.internal_id)}`
-        + `<span>${escapeHtml(item.name)}</span>`;
-      btn.addEventListener('mousedown', (event) => event.preventDefault());
-      btn.addEventListener('click', () => {
-        rows[rowIndex] = Ops.applyArticle(rows[rowIndex], item);
-        delete rows[rowIndex]._articleQuery;
-        list.classList.add('hidden');
-        renderRows({ focus: { rowIndex, colKey: 'ID SUBSIDIARIA' } });
-      });
-      list.appendChild(btn);
-    }
-    list.classList.remove('hidden');
+    renderSuggestChoices(rowIndex, input, list, data.items || []);
   } catch (error) {
     list.innerHTML = `<div class="suggest-empty">${escapeHtml(error.message)}</div>`;
     list.classList.remove('hidden');
+  }
+}
+
+async function resolveArticleAt(rowIndex, { focusNext = false } = {}) {
+  const row = rows[rowIndex];
+  if (!row) return { status: 'missing' };
+  if (row.selectedArticle && Ops.articleConsistent(row) && !row._articleQuery) {
+    return { status: 'already' };
+  }
+  const input = trField(rowIndex, Ops.ARTICLE_ID);
+  const q = (input ? input.value : (row._articleQuery || row.data[Ops.ARTICLE_ID] || '')).trim();
+  const list = input && input.parentElement
+    ? input.parentElement.querySelector('.suggest-list')
+    : null;
+  if (!q) {
+    rows[rowIndex] = Ops.clearArticle(rows[rowIndex]);
+    delete rows[rowIndex]._articleQuery;
+    delete rows[rowIndex]._articleError;
+    if (input) {
+      input.value = '';
+      input.classList.remove('invalid');
+    }
+    const nameInput = trField(rowIndex, Ops.ARTICLE_NAME);
+    if (nameInput) nameInput.value = '';
+    return { status: 'empty' };
+  }
+  try {
+    const params = new URLSearchParams({ q });
+    const response = await fetch(`/api/catalog/resolve?${params}`);
+    const data = await response.json();
+    if (!response.ok || !data.ok) throw new Error(data.error || 'No se pudo resolver el artículo');
+    if (data.status === 'resolved' && data.item) {
+      applyResolvedArticle(rowIndex, data.item, list);
+      renderRows({
+        focus: focusNext
+          ? { rowIndex, colKey: 'AJUSTE DE CANTIDAD' }
+          : { rowIndex, colKey: Ops.ARTICLE_ID, select: false },
+      });
+      setStatus(`Artículo resuelto (${data.item.match || 'exacto'}): ID ${data.item.internal_id}.`);
+      return { status: 'resolved', item: data.item };
+    }
+    if (data.status === 'ambiguous') {
+      rows[rowIndex] = Ops.clearArticle(rows[rowIndex]);
+      rows[rowIndex]._articleQuery = q;
+      rows[rowIndex]._articleError = data.message || 'Código ambiguo.';
+      renderRows({ focus: { rowIndex, colKey: Ops.ARTICLE_ID, select: false } });
+      const inputAfter = trField(rowIndex, Ops.ARTICLE_ID);
+      const listAfter = inputAfter && inputAfter.parentElement
+        ? inputAfter.parentElement.querySelector('.suggest-list')
+        : null;
+      if (listAfter) {
+        renderSuggestChoices(rowIndex, inputAfter, listAfter, data.candidates || [], { ambiguous: true });
+      }
+      setStatus(data.message || 'Código ambiguo: elige una opción.', 'warning');
+      return { status: 'ambiguous' };
+    }
+    rows[rowIndex] = Ops.clearArticle(rows[rowIndex]);
+    rows[rowIndex]._articleQuery = q;
+    rows[rowIndex]._articleError = data.message || 'Sin coincidencia exacta.';
+    renderRows({ focus: { rowIndex, colKey: Ops.ARTICLE_ID, select: false } });
+    setStatus(rows[rowIndex]._articleError, 'warning');
+    return { status: 'not_found' };
+  } catch (error) {
+    setStatus(error.message, 'error');
+    return { status: 'error', error };
   }
 }
 
@@ -503,7 +721,7 @@ function onCellKeydown(event, index, col, input) {
     const key = cellKey(index, col);
     if (draftByCell.has(key)) {
       input.value = draftByCell.get(key);
-      if (col !== Ops.ARTICLE_COL && col !== Ops.ARTICLE_ID && col !== Ops.ARTICLE_NAME) {
+      if (col !== Ops.ARTICLE_ID && col !== Ops.ARTICLE_NAME) {
         rows[index].data[col] = input.value;
       }
       draftByCell.delete(key);
@@ -514,33 +732,52 @@ function onCellKeydown(event, index, col, input) {
 
   if (event.key === 'Enter') {
     event.preventDefault();
-    const nextRow = Math.min(rows.length - 1, index + 1);
-    if (nextRow === index) {
-      rows.push(makeEmptyRow());
-      renderRows({ focus: { rowIndex: index + 1, colKey: col } });
-    } else {
-      focusCell(nextRow, col);
+    const goNextRow = () => {
+      const nextRow = Math.min(rows.length - 1, index + 1);
+      if (nextRow === index) {
+        rows.push(makeEmptyRow());
+        renderRows({ focus: { rowIndex: index + 1, colKey: col } });
+      } else {
+        focusCell(nextRow, col);
+      }
+    };
+    if (col === Ops.ARTICLE_ID) {
+      // Tras resolver, enfoca cantidad en la misma fila (no crea fila vacía).
+      resolveArticleAt(index, { focusNext: true });
+      return;
     }
+    goNextRow();
     return;
   }
 
   if (event.key === 'Tab') {
     event.preventDefault();
-    const cols = visibleCols.filter((c) => c !== Ops.ARTICLE_ID && c !== Ops.ARTICLE_NAME || c === Ops.ARTICLE_COL);
-    // Navigate all visible including readonly for review, but skip readonly on tab for speed
-    const editable = visibleCols.filter((c) => c !== Ops.ARTICLE_ID && c !== Ops.ARTICLE_NAME);
+    // Skip only nombre (readonly); ID INTERNO es editable (búsqueda/resolución).
+    const editable = visibleCols.filter((c) => c !== Ops.ARTICLE_NAME);
     const pos = editable.indexOf(col);
-    if (event.shiftKey) {
-      if (pos > 0) focusCell(index, editable[pos - 1]);
-      else if (index > 0) focusCell(index - 1, editable[editable.length - 1]);
-    } else if (pos >= 0 && pos < editable.length - 1) {
-      focusCell(index, editable[pos + 1]);
-    } else if (index < rows.length - 1) {
-      focusCell(index + 1, editable[0]);
-    } else {
-      rows.push(makeEmptyRow());
-      renderRows({ focus: { rowIndex: index + 1, colKey: editable[0] } });
+    const moveTab = () => {
+      if (event.shiftKey) {
+        if (pos > 0) focusCell(index, editable[pos - 1]);
+        else if (index > 0) focusCell(index - 1, editable[editable.length - 1]);
+      } else if (pos >= 0 && pos < editable.length - 1) {
+        focusCell(index, editable[pos + 1]);
+      } else if (index < rows.length - 1) {
+        focusCell(index + 1, editable[0]);
+      } else {
+        rows.push(makeEmptyRow());
+        renderRows({ focus: { rowIndex: index + 1, colKey: editable[0] } });
+      }
+    };
+    if (col === Ops.ARTICLE_ID) {
+      resolveArticleAt(index, { focusNext: false }).then((result) => {
+        if (result.status === 'ambiguous' || result.status === 'not_found' || result.status === 'error') {
+          return;
+        }
+        moveTab();
+      });
+      return;
     }
+    moveTab();
     return;
   }
 
@@ -599,8 +836,10 @@ function onCopy(event) {
   for (let i = start; i <= end; i += 1) {
     const row = rows[i];
     let value = '';
-    if (active.colKey === Ops.ARTICLE_COL) {
-      value = row.selectedArticle ? row.selectedArticle.ref : (row._articleQuery || '');
+    if (active.colKey === Ops.ARTICLE_ID) {
+      value = row.selectedArticle
+        ? String(row.selectedArticle.internal_id || '')
+        : (row._articleQuery || row.data[Ops.ARTICLE_ID] || '');
     } else {
       value = row.data[active.colKey] || '';
     }
@@ -643,7 +882,7 @@ function onPaste(event) {
     for (let i = 0; i < clipboardCells.values.length; i += 1) {
       const target = start + i;
       while (target >= next.length) next.push(makeEmptyRow());
-      if (active.colKey === Ops.ARTICLE_COL || active.colKey === Ops.ARTICLE_ID || active.colKey === Ops.ARTICLE_NAME) {
+      if (active.colKey === Ops.ARTICLE_ID || active.colKey === Ops.ARTICLE_NAME) {
         next[target] = Ops.applyArticle(next[target], clipboardCells.articles[i]);
       } else {
         next[target] = {
@@ -698,7 +937,7 @@ async function initTemplate() {
   rows = [makeEmptyRow()];
   renderHead();
   distributeWidths();
-  renderRows({ focus: { rowIndex: 0, colKey: Ops.ARTICLE_COL, select: false } });
+  renderRows({ focus: { rowIndex: 0, colKey: Ops.ARTICLE_ID, select: false } });
 }
 
 addRowButton.addEventListener('click', () => {
@@ -714,12 +953,79 @@ resetWidthsButton.addEventListener('click', () => {
   setStatus('Anchos restablecidos.');
 });
 
+async function refreshCsvPreview() {
+  csvPreviewStatus.textContent = 'Generando vista previa…';
+  csvPreviewStatus.className = 'status';
+  try {
+    const response = await fetch('/api/purchase/preview', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ rows: collectRowsPayload() }),
+    });
+    const data = await response.json();
+    if (!response.ok || !data.ok) {
+      if (data.errors && data.errors.length) showErrorTable(data.errors);
+      throw new Error(data.error || 'Vista previa no disponible.');
+    }
+    createErrors.classList.add('hidden');
+    const headers = data.headers || (template && template.headers) || [];
+    csvPreviewHead.innerHTML = '';
+    const headRow = document.createElement('tr');
+    for (const header of headers) {
+      const th = document.createElement('th');
+      th.textContent = header;
+      th.title = header;
+      headRow.appendChild(th);
+    }
+    csvPreviewHead.appendChild(headRow);
+    csvPreviewBody.innerHTML = '';
+    for (const row of data.rows || []) {
+      const tr = document.createElement('tr');
+      for (const header of headers) {
+        const td = document.createElement('td');
+        td.textContent = row[header] || '';
+        tr.appendChild(td);
+      }
+      csvPreviewBody.appendChild(tr);
+    }
+    csvPreviewStatus.textContent = `${data.row_count} fila(s) — mismos valores que la descarga.`;
+    csvPreviewStatus.className = 'status success';
+    return data;
+  } catch (error) {
+    csvPreviewStatus.textContent = error.message;
+    csvPreviewStatus.className = 'status error';
+    throw error;
+  }
+}
+
+previewCsvButton.addEventListener('click', async () => {
+  csvPreviewPanel.classList.remove('hidden');
+  csvPreviewPanel.open = true;
+  try {
+    await refreshCsvPreview();
+    setStatus('Vista previa actualizada.');
+  } catch (error) {
+    setStatus(error.message, 'error');
+  }
+});
+
 downloadButton.addEventListener('click', async () => {
   for (const row of rows) {
     if (!Ops.articleConsistent(row) && ((row.data[Ops.ARTICLE_ID] || row.data[Ops.ARTICLE_NAME]))) {
       setStatus('Hay artículos inconsistentes. Selecciona el artículo desde la búsqueda.', 'error');
       return;
     }
+  }
+  const dateErrors = Ops.validateDateFields(
+    rows,
+    (template && template.required_fields) || [],
+  );
+  if (dateErrors.length) {
+    showErrorTable(dateErrors);
+    setStatus('Hay fechas inválidas. Corrige DD/MM/AAAA antes de descargar.', 'error');
+    // Refresca marcas visuales junto a cada celda fecha.
+    renderRows({ focus: { rowIndex: active.rowIndex, colKey: active.colKey, select: false } });
+    return;
   }
   downloadButton.disabled = true;
   setStatus('Validando y generando CSV…');
@@ -733,17 +1039,7 @@ downloadButton.addEventListener('click', async () => {
     const data = await response.json();
     if (!response.ok || !data.ok) {
       if (data.errors && data.errors.length) {
-        createErrorsBody.innerHTML = '';
-        for (const err of data.errors) {
-          const tr = document.createElement('tr');
-          for (const value of [err.row, err.field || '', err.message]) {
-            const td = document.createElement('td');
-            td.textContent = value;
-            tr.appendChild(td);
-          }
-          createErrorsBody.appendChild(tr);
-        }
-        createErrors.classList.remove('hidden');
+        showErrorTable(data.errors);
       }
       throw new Error(data.error || 'No fue posible generar el archivo.');
     }

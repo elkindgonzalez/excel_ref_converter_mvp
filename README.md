@@ -38,10 +38,10 @@ Doble clic en `iniciar_windows.bat` o:
 ## Crear archivo
 
 1. Abre la pestaña **Crear archivo**.
-2. Busca artículos por Ref, ID interno o nombre (sugerencias desde el servidor; no se descarga el catálogo completo).
-3. Al seleccionar, se completan `ID INTERNO ARTICULO` (ID real) y `NOMBRE DE ARTICULO`.
-4. Completa el resto de campos de la plantilla.
-5. Usa **duplicar**, **copiar ↑** (desde fila anterior), **Rellenar ↓** / `Ctrl|⌘+D`, y pegado desde Excel.
+2. En `ID INTERNO ARTICULO` escribe la **Ref** comercial o el ID interno. Con Enter/Tab/blur, una coincidencia exacta se convierte al ID y completa el nombre sola.
+3. No hace falta digitar `NOMBRE DE ARTICULO` (se rellena desde el catálogo).
+4. Completa el resto de campos (`FECHA DE AJUSTE` en `DD/MM/AAAA`).
+5. Usa **duplicar**, **copiar ↑**, **Rellenar ↓** / `Ctrl|⌘+D`, pegado desde Excel y **Vista previa del CSV**.
 6. Redimensiona columnas arrastrando el borde del encabezado (doble clic = autoajuste).
 7. Pulsa **Descargar CSV**.
 
@@ -74,6 +74,8 @@ Archivo maestro: `data/catalogo_articulos.csv` (`ID interno`, `Nombre`, `Ref`).
 |---|---|---|
 | `GET` | `/api/purchase/template` | Contrato de plantilla |
 | `GET` | `/api/catalog/suggest?q=` | Autocompletado de artículos |
+| `GET` | `/api/catalog/resolve?q=` | Resolución exacta Ref/ID (o ambigüedad) |
+| `POST` | `/api/purchase/preview` | Vista previa con la misma normalización que el CSV |
 | `POST` | `/api/purchase/export` | Valida filas y prepara descarga CSV |
 | `GET` | `/api/download?token=` | Descarga temporal |
 | `GET` | `/api/catalog` | Lista/busca catálogo |

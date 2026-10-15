@@ -32,16 +32,24 @@ Fuente de verdad inspeccionada: `Alexis Compras pruebas.csv` (Downloads del ento
 
 - `ID SUBSIDIARIA`
 - `iDENTIFICAR`
-- `FECHA DE AJUSTE` (`DD/MM/AAAA`)
+- `FECHA DE AJUSTE` (`DD/MM/AAAA`, fecha de calendario existente; p. ej. `30/09/2026`. Se exporta igual, sin ISO.)
 - `TIPO DE AJUSTE`
 - `UBICACIÓN DE AJUSTE`
-- `ID INTERNO ARTICULO` (ID real del catálogo, no la referencia comercial)
-- `NOMBRE DE ARTICULO` (debe coincidir con el catálogo)
+- `ID INTERNO ARTICULO` (puede escribirse como **Ref** comercial o como ID interno; el sistema resuelve y exporta siempre el ID interno)
 - `AJUSTE DE CANTIDAD` (número, puede ser negativo)
 - `ESTADO`
 
-Opcionales: `NOTA`, `CENTRO DE COSTOS`, `SUBCENTRO DE COSTOS`, `AREA`, `SOLICITANTE`.
+Opcionales: `NOTA`, `NOMBRE DE ARTICULO`, `CENTRO DE COSTOS`, `SUBCENTRO DE COSTOS`, `AREA`, `SOLICITANTE`.
+
+`NOMBRE DE ARTICULO` **no** se pide al usuario: se completa automáticamente desde el catálogo al resolver el artículo. Si se envía un nombre distinto al del catálogo, la exportación falla.
+
+## Resolución de artículos
+
+- Coincidencia exacta de Ref → ID interno + nombre.
+- Coincidencia exacta de ID interno → mismo resultado.
+- Si el código es Ref de un artículo e ID de otro → ambigüedad; el usuario debe elegir.
+- Prefijos parciales no se convierten solos (solo sugieren); la resolución ocurre con Enter, Tab o al salir del campo.
 
 ## Nota sobre el flujo anterior
 
-En el archivo de prueba original, `ID INTERNO ARTICULO` contenía la **referencia comercial** y `NOMBRE DE ARTICULO` venía vacío. El nuevo módulo **Crear archivo** escribe directamente el ID interno real y el nombre del catálogo, que es el formato exigido por el destino.
+En el archivo de prueba original, `ID INTERNO ARTICULO` contenía la **referencia comercial** y `NOMBRE DE ARTICULO` venía vacío. El módulo **Crear archivo** acepta la Ref en el formulario, la convierte al ID interno real y rellena el nombre del catálogo en la exportación.

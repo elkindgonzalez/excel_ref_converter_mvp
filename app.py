@@ -110,18 +110,22 @@ PURCHASE_REQUIRED_FIELDS = [
     "TIPO DE AJUSTE",
     "UBICACIÓN DE AJUSTE",
     "ID INTERNO ARTICULO",
-    "NOMBRE DE ARTICULO",
     "AJUSTE DE CANTIDAD",
     "ESTADO",
 ]
 PURCHASE_OPTIONAL_FIELDS = [
     "NOTA",
+    "NOMBRE DE ARTICULO",
     "CENTRO DE COSTOS",
     "SUBCENTRO DE COSTOS",
     "AREA",
     "SOLICITANTE",
 ]
-PURCHASE_DATE_RE = re.compile(r"^\d{2}/\d{2}/\d{4}$")
+# Único campo fecha de la plantilla Alexis Compras; formato de salida fijo DD/MM/AAAA.
+PURCHASE_DATE_FIELDS = ["FECHA DE AJUSTE"]
+PURCHASE_DATE_FORMAT = "DD/MM/AAAA"
+PURCHASE_DATE_RE = re.compile(r"^(\d{2})/(\d{2})/(\d{4})$")
+PURCHASE_DATE_ERROR = "Fecha inválida. Usa el formato DD/MM/AAAA (ej. 30/09/2026) y una fecha existente."
 PURCHASE_QTY_RE = re.compile(r"^-?\d+(?:[.,]\d+)?$")
 CATALOG_SUGGEST_LIMIT_DEFAULT = 20
 CATALOG_SUGGEST_LIMIT_MAX = 50
@@ -653,6 +657,90 @@ def suggest_catalog(query: str = "", limit: int = CATALOG_SUGGEST_LIMIT_DEFAULT)
     }
 
 
+def resolve_article_code(
+    code: str,
+    catalog: Optional[Dict[str, CatalogItem]] = None,
+) -> dict:
+    """Resolve an exact commercial Ref and/or internal ID.
+
+    - Unique exact Ref → resolved (match=ref)
+    - Unique exact internal ID → resolved (match=id)
+    - Same code is Ref of A and ID of B (A≠B) → ambiguous
+    - No exact match → not_found
+    Never auto-resolves partial prefixes.
+    """
+    raw = _cell_str(code)
+    if not raw:
+        return {
+            "ok": True,
+            "status": "empty",
+            "query": "",
+            "item": None,
+            "candidates": [],
+            "message": "",
+        }
+    if catalog is None:
+        with CATALOG_LOCK:
+            catalog = load_persistent_catalog()
+    by_ref, _ = indexes_from_catalog(catalog)
+    ref_key = normalize_ref_value(raw)
+    id_key = normalize_number(raw)
+
+    ref_item = by_ref.get(ref_key) if ref_key else None
+    id_item = catalog.get(id_key) if id_key else None
+
+    if ref_item and id_item and ref_item.internal_id != id_item.internal_id:
+        return {
+            "ok": True,
+            "status": "ambiguous",
+            "query": raw,
+            "item": None,
+            "candidates": [
+                {**ref_item.to_dict(), "match": "ref"},
+                {**id_item.to_dict(), "match": "id"},
+            ],
+            "message": (
+                "El código coincide con la Ref de un artículo y el ID interno de otro. "
+                "Elige la opción correcta."
+            ),
+        }
+    if ref_item and id_item and ref_item.internal_id == id_item.internal_id:
+        return {
+            "ok": True,
+            "status": "resolved",
+            "query": raw,
+            "item": {**ref_item.to_dict(), "match": "both"},
+            "candidates": [],
+            "message": "",
+        }
+    if ref_item:
+        return {
+            "ok": True,
+            "status": "resolved",
+            "query": raw,
+            "item": {**ref_item.to_dict(), "match": "ref"},
+            "candidates": [],
+            "message": "",
+        }
+    if id_item:
+        return {
+            "ok": True,
+            "status": "resolved",
+            "query": raw,
+            "item": {**id_item.to_dict(), "match": "id"},
+            "candidates": [],
+            "message": "",
+        }
+    return {
+        "ok": True,
+        "status": "not_found",
+        "query": raw,
+        "item": None,
+        "candidates": [],
+        "message": f"No hay coincidencia exacta de Ref ni ID interno para «{raw}».",
+    }
+
+
 def purchase_template_contract() -> dict:
     return {
         "ok": True,
@@ -662,13 +750,17 @@ def purchase_template_contract() -> dict:
         "line_terminator": "CRLF",
         "required_fields": list(PURCHASE_REQUIRED_FIELDS),
         "optional_fields": list(PURCHASE_OPTIONAL_FIELDS),
+        "date_fields": list(PURCHASE_DATE_FIELDS),
+        "date_format": PURCHASE_DATE_FORMAT,
         "article_fields": {
             "id": TARGET_ID_HEADER,
             "name": TARGET_NAME_HEADER,
         },
         "notes": (
             "Contrato tomado de 'Alexis Compras pruebas.csv'. "
-            "Los encabezados y el orden son exactos (incluye 'iDENTIFICAR')."
+            "Los encabezados y el orden son exactos (incluye 'iDENTIFICAR'). "
+            "Las fechas usan DD/MM/AAAA sin conversión a ISO. "
+            "NOMBRE DE ARTICULO se completa desde el catálogo; no es obligatorio en el formulario."
         ),
     }
 
@@ -677,6 +769,28 @@ def _cell_str(value: object) -> str:
     if value is None:
         return ""
     return strip_invisible_chars(str(value)).strip()
+
+
+def parse_purchase_date(value: str) -> Optional[datetime]:
+    """Parse DD/MM/AAAA and reject nonexistent calendar dates (incl. leap years)."""
+    text = (value or "").strip()
+    match = PURCHASE_DATE_RE.fullmatch(text)
+    if not match:
+        return None
+    day, month, year = int(match.group(1)), int(match.group(2)), int(match.group(3))
+    try:
+        return datetime(year, month, day)
+    except ValueError:
+        return None
+
+
+def is_valid_purchase_date(value: str) -> bool:
+    return parse_purchase_date(value) is not None
+
+
+def format_purchase_date(value: datetime) -> str:
+    """Always emit DD/MM/AAAA for export/display."""
+    return value.strftime("%d/%m/%Y")
 
 
 def validate_purchase_rows(
@@ -712,12 +826,20 @@ def validate_purchase_rows(
                     "message": f"Campo obligatorio vacío: {field_name}",
                 })
 
-        if row["FECHA DE AJUSTE"] and not PURCHASE_DATE_RE.fullmatch(row["FECHA DE AJUSTE"]):
-            row_errors.append({
-                "row": index,
-                "field": "FECHA DE AJUSTE",
-                "message": "Fecha inválida. Usa el formato DD/MM/AAAA.",
-            })
+        for date_field in PURCHASE_DATE_FIELDS:
+            date_value = row[date_field]
+            if not date_value:
+                continue
+            parsed = parse_purchase_date(date_value)
+            if parsed is None:
+                row_errors.append({
+                    "row": index,
+                    "field": date_field,
+                    "message": PURCHASE_DATE_ERROR,
+                })
+            else:
+                # Conservar DD/MM/AAAA (nunca ISO) aunque el origen trajera ceros inconsistentes.
+                row[date_field] = format_purchase_date(parsed)
 
         if row["AJUSTE DE CANTIDAD"] and not PURCHASE_QTY_RE.fullmatch(row["AJUSTE DE CANTIDAD"].replace(" ", "")):
             row_errors.append({
@@ -726,26 +848,36 @@ def validate_purchase_rows(
                 "message": "Cantidad inválida. Usa un número (puede ser negativo).",
             })
 
-        internal_id = normalize_number(row[TARGET_ID_HEADER])
+        raw_code = row[TARGET_ID_HEADER]
         name = row[TARGET_NAME_HEADER]
-        if internal_id:
-            item = catalog.get(internal_id)
-            if item is None:
-                row_errors.append({
-                    "row": index,
-                    "field": TARGET_ID_HEADER,
-                    "message": f"El artículo con ID interno {internal_id} no existe en el catálogo.",
-                })
-            else:
+        if raw_code:
+            resolution = resolve_article_code(raw_code, catalog)
+            if resolution["status"] == "resolved":
+                item_dict = resolution["item"]
+                item = catalog[item_dict["internal_id"]]
                 row[TARGET_ID_HEADER] = item.internal_id
                 if name and name != item.name:
                     row_errors.append({
                         "row": index,
                         "field": TARGET_NAME_HEADER,
-                        "message": "El nombre no corresponde al ID interno seleccionado en el catálogo.",
+                        "message": "El nombre no corresponde al artículo del catálogo. Déjalo vacío o corrige el ID.",
                     })
-                elif not name:
+                else:
                     row[TARGET_NAME_HEADER] = item.name
+            elif resolution["status"] == "ambiguous":
+                row_errors.append({
+                    "row": index,
+                    "field": TARGET_ID_HEADER,
+                    "message": resolution["message"],
+                })
+            else:
+                row_errors.append({
+                    "row": index,
+                    "field": TARGET_ID_HEADER,
+                    "message": resolution["message"] or (
+                        f"El código «{raw_code}» no existe como Ref ni como ID interno en el catálogo."
+                    ),
+                })
 
         if row_errors:
             errors.extend(row_errors)
@@ -753,6 +885,22 @@ def validate_purchase_rows(
             normalized.append(row)
 
     return normalized, errors
+
+
+def preview_purchase_rows(rows: List[dict]) -> dict:
+    """Same normalization as export, without writing a downloadable file."""
+    with CATALOG_LOCK:
+        catalog = load_persistent_catalog()
+    if not catalog:
+        raise ValueError("El catálogo está vacío. Actualiza el catálogo antes de crear archivos.")
+    normalized, errors = validate_purchase_rows(rows, catalog)
+    return {
+        "ok": not errors,
+        "headers": list(PURCHASE_HEADERS),
+        "rows": normalized if not errors else [],
+        "errors": errors,
+        "row_count": len(normalized) if not errors else 0,
+    }
 
 
 def export_purchase_csv(rows: List[dict]) -> Tuple[bytes, str, List[dict]]:
@@ -1609,7 +1757,7 @@ def require_catalog_admin(handler: BaseHTTPRequestHandler) -> Optional[str]:
 
 
 class AppHandler(BaseHTTPRequestHandler):
-    server_version = "ExcelRefConverter/1.4"
+    server_version = "ExcelRefConverter/1.5"
 
     def log_message(self, format: str, *args) -> None:
         sys.stdout.write("[%s] %s\n" % (self.log_date_time_string(), format % args))
@@ -1620,6 +1768,36 @@ class AppHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(data)))
         self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(data)
+
+    @staticmethod
+    def _asset_version(relative_path: str) -> str:
+        path = STATIC_DIR / relative_path
+        try:
+            mtime = path.stat().st_mtime_ns
+            digest = hashlib.sha1(f"{relative_path}:{mtime}".encode("utf-8")).hexdigest()[:10]
+            return digest
+        except OSError:
+            return "0"
+
+    def _serve_index(self) -> None:
+        """Serve index.html with cache-busted asset URLs so browsers load fresh JS/CSS."""
+        path = STATIC_DIR / "index.html"
+        if not path.exists():
+            self.send_error(HTTPStatus.NOT_FOUND)
+            return
+        html = path.read_text(encoding="utf-8")
+        for asset in ("styles.css", "purchase_ops.js", "app.js"):
+            version = self._asset_version(asset)
+            html = html.replace(f'href="/{asset}"', f'href="/{asset}?v={version}"')
+            html = html.replace(f'src="/{asset}"', f'src="/{asset}?v={version}"')
+        data = html.encode("utf-8")
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "no-store, no-cache, must-revalidate")
+        self.send_header("Pragma", "no-cache")
         self.end_headers()
         self.wfile.write(data)
 
@@ -1638,6 +1816,7 @@ class AppHandler(BaseHTTPRequestHandler):
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", guessed)
         self.send_header("Content-Length", str(len(data)))
+        # Versioned URLs (?v=) allow short cache; unversioned keep no-store.
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(data)
@@ -1646,7 +1825,7 @@ class AppHandler(BaseHTTPRequestHandler):
         cleanup_downloads()
         parsed = urlparse(self.path)
         if parsed.path == "/":
-            self._serve_static("index.html", "text/html; charset=utf-8")
+            self._serve_index()
             return
         if parsed.path == "/styles.css":
             self._serve_static("styles.css", "text/css; charset=utf-8")
@@ -1684,6 +1863,11 @@ class AppHandler(BaseHTTPRequestHandler):
                 self._send_json({"ok": False, "error": "Parámetro limit inválido."}, HTTPStatus.BAD_REQUEST)
                 return
             self._send_json(suggest_catalog(q, limit))
+            return
+        if parsed.path == "/api/catalog/resolve":
+            query = parse_qs(parsed.query)
+            q = query.get("q", [""])[0]
+            self._send_json(resolve_article_code(q))
             return
         if parsed.path == "/api/purchase/template":
             self._send_json(purchase_template_contract())
@@ -1803,6 +1987,30 @@ class AppHandler(BaseHTTPRequestHandler):
             with IMPORT_PREVIEWS_LOCK:
                 IMPORT_PREVIEWS.pop(token, None)
             self._send_json(result)
+            return
+
+        if parsed.path == "/api/purchase/preview":
+            try:
+                payload = read_json_body(self)
+                rows = payload.get("rows", [])
+                result = preview_purchase_rows(rows)
+            except ValueError as exc:
+                self._send_json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
+                return
+            except Exception as exc:
+                print(f"Error en vista previa de compras: {exc}", file=sys.stderr)
+                self._send_json(
+                    {"ok": False, "error": "No fue posible generar la vista previa."},
+                    HTTPStatus.INTERNAL_SERVER_ERROR,
+                )
+                return
+            status = HTTPStatus.OK if result.get("ok") else HTTPStatus.BAD_REQUEST
+            if not result.get("ok"):
+                result = {
+                    **result,
+                    "error": "Hay errores de validación.",
+                }
+            self._send_json(result, status)
             return
 
         if parsed.path == "/api/purchase/export":

@@ -57,6 +57,9 @@ class PurchaseUxOpsTests(unittest.TestCase):
         self.assertEqual(contract["headers"][7], "NOMBRE DE ARTICULO")
         self.assertEqual(contract["delimiter"], ";")
         self.assertNotEqual(contract["headers"], sorted(contract["headers"]))
+        # No helper column in the plantilla contract served to the UI.
+        self.assertNotIn("__ARTICLE__", contract["headers"])
+        self.assertNotIn("Artículo", contract["headers"])
 
     def test_export_preserves_order_after_logical_duplicate(self):
         # Mirrors UX duplicate then export: order must match row order.

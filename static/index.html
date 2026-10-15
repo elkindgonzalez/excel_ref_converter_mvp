@@ -25,14 +25,16 @@
           <div>
             <h2>Archivo de compras</h2>
             <p class="muted tip-line">
-              <kbd>⇥</kbd> navegar · <kbd>⌘/Ctrl</kbd>+<kbd>C</kbd>/<kbd>V</kbd> copiar/pegar ·
-              <kbd>⌘/Ctrl</kbd>+<kbd>D</kbd> rellenar ↓ · duplicar/copiar↑ en la fila
+              Escribe Ref o ID en «ID int.» (Enter/Tab resuelve) ·
+              <kbd>⇥</kbd> navegar · <kbd>⌘/Ctrl</kbd>+<kbd>C</kbd>/<kbd>V</kbd> ·
+              <kbd>⌘/Ctrl</kbd>+<kbd>D</kbd> rellenar ↓
             </p>
           </div>
           <div class="toolbar-actions">
             <button id="addRowButton" class="button secondary" type="button">Agregar fila</button>
             <button id="fillDownButton" class="button secondary" type="button" title="Rellenar hacia abajo desde la celda activa">Rellenar ↓</button>
             <button id="resetWidthsButton" class="button secondary" type="button" title="Restablecer anchos de columnas">Restablecer anchos</button>
+            <button id="previewCsvButton" class="button secondary" type="button" title="Revisa los valores finales en el orden de la plantilla">Vista previa del CSV</button>
             <button id="downloadButton" class="button primary" type="button">Descargar CSV</button>
           </div>
         </div>
@@ -44,6 +46,18 @@
             <tbody id="purchaseBody"></tbody>
           </table>
         </div>
+
+        <details id="csvPreviewPanel" class="csv-preview hidden">
+          <summary>Vista previa del CSV (valores finales de exportación)</summary>
+          <p class="muted tip-line">Misma normalización que la descarga: ID interno, nombre del catálogo, fechas DD/MM/AAAA, 14 columnas.</p>
+          <div class="table-wrap preview-scroll">
+            <table id="csvPreviewTable">
+              <thead id="csvPreviewHead"></thead>
+              <tbody id="csvPreviewBody"></tbody>
+            </table>
+          </div>
+          <p id="csvPreviewStatus" class="status" aria-live="polite"></p>
+        </details>
 
         <p id="createStatus" class="status" aria-live="polite"></p>
         <div id="createErrors" class="issues hidden">

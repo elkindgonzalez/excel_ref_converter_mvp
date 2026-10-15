@@ -36,11 +36,23 @@ Medición vía DevTools (`purchaseScroll.scrollWidth` vs `clientWidth`) tras «R
 
 | Resolución | Resultado |
 |---|---|
-| 1920×1080 | Sin scroll horizontal (`scrollWidth === clientWidth`). 15 encabezados UI + acciones. |
+| 1920×1080 | Sin scroll horizontal (`scrollWidth === clientWidth`). 14 columnas de plantilla + acciones. La búsqueda de artículo vive dentro de `ID INTERNO ARTICULO` (sin columna auxiliar). |
 | 1440×900 | Sin scroll horizontal. |
 | 1366×768 | Sin scroll horizontal con anchos por defecto; al ensanchar columnas manualmente aparece scroll. |
 
 Limitación: con nombres de artículo largos y anchos personalizados elevados, el scroll horizontal es intencional. En viewports < ~1100px la legibilidad manda sobre “todo visible a la vez”.
+
+## Resolución de artículo (ID INTERNO)
+
+- Escribe Ref o ID en la columna `ID INTERNO ARTICULO`.
+- Durante la escritura solo se sugieren coincidencias (debounce); no se convierte un prefijo parcial.
+- Enter, Tab o blur con coincidencia exacta y única → muestra el ID interno y completa el nombre.
+- Ambigüedad Ref vs ID → lista de opciones; no se elige sola.
+- `NOMBRE DE ARTICULO` es de solo lectura y no obligatorio en el formulario.
+
+## Vista previa del CSV
+
+Botón «Vista previa del CSV»: misma normalización que `/api/purchase/export` (sin archivo temporal). 14 columnas en orden de plantilla.
 
 ## Qué no cambia
 

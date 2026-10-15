@@ -57,7 +57,7 @@ rows = dup.rows;
 let copy = Ops.copyFieldFromPrevious(rows, 2, "ID SUBSIDIARIA");
 assert.ok(copy.ok);
 assert.strictEqual(copy.rows[2].data["ID SUBSIDIARIA"], "2");
-copy = Ops.copyFieldFromPrevious(rows, 2, Ops.ARTICLE_COL);
+copy = Ops.copyFieldFromPrevious(rows, 2, Ops.ARTICLE_ID);
 assert.ok(copy.ok);
 assert.strictEqual(copy.rows[2].data["ID INTERNO ARTICULO"], "21999");
 assert.ok(Ops.articleConsistent(copy.rows[2]));
@@ -72,7 +72,7 @@ rows = [
 rows = Ops.fillDown(rows, "ESTADO", 0, 2);
 assert.strictEqual(rows[1].data.ESTADO, "Disponible");
 assert.strictEqual(rows[2].data.ESTADO, "Disponible");
-rows = Ops.fillDown(rows, Ops.ARTICLE_COL, 0, 2);
+rows = Ops.fillDown(rows, Ops.ARTICLE_ID, 0, 2);
 assert.strictEqual(rows[2].data["ID INTERNO ARTICULO"], "21999");
 assert.ok(Ops.articleConsistent(rows[1]));
 
@@ -86,7 +86,7 @@ assert.strictEqual(pasted.rows[0].data["ID SUBSIDIARIA"], "2");
 assert.strictEqual(pasted.rows[0].data.iDENTIFICAR, "TAG");
 assert.strictEqual(pasted.rows[1].data.iDENTIFICAR, "TAG2");
 
-// Pegado alineado al orden de plantilla: col 7/8 = ID/nombre (derivados → error), col 9 = cantidad
+// Pegado alineado al orden de plantilla (14 cols)
 const plantillaLine = [
   "2", "TAGX", "15/10/2026", "17", "5", "NOTA-X",
   "21999", "MOTOR X", "-9", "Disponible", "707", "7070", "TEATRO", "ANA",
@@ -96,12 +96,19 @@ assert.strictEqual(pasted.rows[0].data["NOTA"], "NOTA-X");
 assert.strictEqual(pasted.rows[0].data["AJUSTE DE CANTIDAD"], "-9");
 assert.strictEqual(pasted.rows[0].data.ESTADO, "Disponible");
 assert.strictEqual(pasted.rows[0].data.SOLICITANTE, "ANA");
-assert.ok(pasted.errors.some((e) => e.field === "ID INTERNO ARTICULO"));
+// ID INTERNO recibe consulta de búsqueda (no fija ID sin selección)
+assert.strictEqual(pasted.rows[0]._articleQuery, "21999");
+assert.strictEqual(pasted.rows[0].data["ID INTERNO ARTICULO"], "");
 assert.ok(pasted.errors.some((e) => e.field === "NOMBRE DE ARTICULO"));
 
-// paste into derived article fields reports errors
-pasted = Ops.applyPaste([baseRow(1)], 0, Ops.ARTICLE_ID, [["999"]], HEADERS);
+// paste into nombre derivado reports errors
+pasted = Ops.applyPaste([baseRow(1)], 0, Ops.ARTICLE_NAME, [["WRONG"]], HEADERS);
 assert.ok(pasted.errors.length >= 1);
+
+// paste into ID INTERNO starts search query
+pasted = Ops.applyPaste([baseRow(1, { article })], 0, Ops.ARTICLE_ID, [["12948087"]], HEADERS);
+assert.strictEqual(pasted.rows[0]._articleQuery, "12948087");
+assert.strictEqual(pasted.rows[0].selectedArticle, null);
 
 // 8-10 article integrity after duplicate + change
 rows = [Ops.applyArticle(baseRow(1), article)];
@@ -118,33 +125,15 @@ const inconsistent = {
 };
 assert.strictEqual(Ops.articleConsistent(inconsistent), false);
 
-// 11-12 export order and 14 columns — exact plantilla order (no alphabetical, no UI reorder)
-const EXPECTED_PLANTILLA = [
-  "ID SUBSIDIARIA",
-  "iDENTIFICAR",
-  "FECHA DE AJUSTE",
-  "TIPO DE AJUSTE",
-  "UBICACIÓN DE AJUSTE",
-  "NOTA",
-  "ID INTERNO ARTICULO",
-  "NOMBRE DE ARTICULO",
-  "AJUSTE DE CANTIDAD",
-  "ESTADO",
-  "CENTRO DE COSTOS",
-  "SUBCENTRO DE COSTOS",
-  "AREA",
-  "SOLICITANTE",
-];
-assert.deepStrictEqual(HEADERS, EXPECTED_PLANTILLA);
-assert.deepStrictEqual(Ops.plantillaColumns(HEADERS), EXPECTED_PLANTILLA);
-
-const uiCols = Ops.visibleColumns(HEADERS);
-assert.strictEqual(uiCols[0], Ops.ARTICLE_COL);
-assert.deepStrictEqual(uiCols.slice(1), EXPECTED_PLANTILLA);
-assert.strictEqual(uiCols.indexOf("ID INTERNO ARTICULO"), 7); // helper + 6 before
-assert.strictEqual(uiCols.indexOf("NOMBRE DE ARTICULO"), 8);
-assert.ok(uiCols.indexOf("ID INTERNO ARTICULO") < uiCols.indexOf("AJUSTE DE CANTIDAD"));
-assert.ok(uiCols.indexOf("NOMBRE DE ARTICULO") < uiCols.indexOf("AJUSTE DE CANTIDAD"));
+// 11-12: exactamente 14 columnas, sin auxiliar, orden plantilla
+assert.deepStrictEqual(HEADERS, Ops.plantillaColumns(HEADERS));
+assert.deepStrictEqual(Ops.visibleColumns(HEADERS), HEADERS);
+assert.strictEqual(Ops.visibleColumns(HEADERS).length, 14);
+assert.ok(!Ops.visibleColumns(HEADERS).includes(Ops.ARTICLE_COL));
+assert.strictEqual(Ops.visibleColumns(HEADERS)[6], "ID INTERNO ARTICULO");
+assert.strictEqual(Ops.visibleColumns(HEADERS)[7], "NOMBRE DE ARTICULO");
+assert.strictEqual(Ops.visibleColumns(HEADERS)[8], "AJUSTE DE CANTIDAD");
+assert.notDeepStrictEqual(Ops.visibleColumns(HEADERS), [...HEADERS].sort());
 
 const ordered = Ops.exportOrder([
   Ops.applyArticle(baseRow(1, { data: { iDENTIFICAR: "FIRST" } }), article),
@@ -167,24 +156,89 @@ const cloned = Ops.cloneRow(original, 99);
 assert.strictEqual(cloned.data.NOTA, "ÁÉÍ");
 assert.strictEqual(original.data.NOTA, "ÁÉÍ");
 
-// 15/16 widths resize
+// 15/16 widths resize — sin columna auxiliar
 let widths = Ops.defaultColumnWidthsPx(HEADERS, 1920, 78);
-assert.ok(widths[Ops.ARTICLE_COL] >= Ops.MIN_COL_PX[Ops.ARTICLE_COL]);
+assert.strictEqual(Object.keys(widths).length, 14);
+assert.ok(widths["ID INTERNO ARTICULO"] >= Ops.MIN_COL_PX["ID INTERNO ARTICULO"]);
 const before = widths["NOTA"];
 widths = Ops.resizeColumn(widths, "NOTA", 40);
 assert.strictEqual(widths.NOTA, before + 40);
 widths = Ops.autoFitColumn(widths, "NOTA", 200);
 assert.ok(widths.NOTA >= Ops.MIN_COL_PX.NOTA);
 
-// responsive width distributions exist for smaller screens
 for (const w of [1920, 1440, 1366, 1024]) {
   const dist = Ops.defaultColumnWidthsPx(HEADERS, w, 78);
   const sum = Object.values(dist).reduce((a, b) => a + b, 0);
   assert.ok(sum > 0);
-  // At wide screens, prefer fitting; mins may force scroll on narrow.
   if (w >= 1440) {
     assert.ok(sum <= w - 78 + 200, `unexpected overflow at ${w}: ${sum}`);
   }
 }
+
+// Date validation (FECHA DE AJUSTE only)
+assert.deepStrictEqual(Ops.DATE_FIELDS, ["FECHA DE AJUSTE"]);
+assert.strictEqual(Ops.DATE_FORMAT, "DD/MM/AAAA");
+assert.ok(Ops.isDateField("FECHA DE AJUSTE"));
+assert.ok(!Ops.isDateField("NOTA"));
+assert.ok(Ops.isValidPurchaseDate("30/09/2026"));
+assert.ok(Ops.isValidPurchaseDate("29/02/2024"));
+assert.ok(!Ops.isValidPurchaseDate("29/02/2023"));
+assert.ok(!Ops.isValidPurchaseDate("31/04/2026"));
+assert.ok(!Ops.isValidPurchaseDate("2026-09-30"));
+assert.strictEqual(Ops.isoToPurchaseDate("2026-09-30"), "30/09/2026");
+assert.strictEqual(Ops.purchaseDateToIso("30/09/2026"), "2026-09-30");
+assert.strictEqual(Ops.coercePurchaseDateInput("2026-09-30").value, "30/09/2026");
+assert.strictEqual(Ops.coercePurchaseDateInput("31/02/2026").ok, false);
+
+const datePaste = Ops.applyPaste(
+  [baseRow(1)],
+  0,
+  "FECHA DE AJUSTE",
+  [["2026-10-15"], ["31/02/2026"]],
+  HEADERS,
+);
+assert.strictEqual(datePaste.rows[0].data["FECHA DE AJUSTE"], "15/10/2026");
+assert.strictEqual(datePaste.rows[1].data["FECHA DE AJUSTE"], "31/02/2026");
+assert.ok(datePaste.errors.some((e) => e.field === "FECHA DE AJUSTE"));
+
+let filled = [
+  Ops.applyArticle(baseRow(1, { data: { "FECHA DE AJUSTE": "30/09/2026" } }), article),
+  baseRow(2),
+];
+filled = Ops.fillDown(filled, "FECHA DE AJUSTE", 0, 1);
+assert.strictEqual(filled[1].data["FECHA DE AJUSTE"], "30/09/2026");
+const dupDate = Ops.duplicateRow(filled, 0, 9);
+assert.strictEqual(dupDate.newRow.data["FECHA DE AJUSTE"], "30/09/2026");
+
+const dateErrors = Ops.validateDateFields(
+  [baseRow(1, { data: { "FECHA DE AJUSTE": "31/02/2026" } })],
+  ["FECHA DE AJUSTE"],
+);
+assert.ok(dateErrors.length >= 1);
+assert.strictEqual(dateErrors[0].field, "FECHA DE AJUSTE");
+
+// Article apply + change after resolve + nombre filled
+let artRow = Ops.applyArticle(baseRow(1), article);
+assert.strictEqual(artRow.data["ID INTERNO ARTICULO"], "21999");
+assert.strictEqual(artRow.data["NOMBRE DE ARTICULO"], "MOTOR X");
+artRow = Ops.applyArticle(artRow, article2);
+assert.strictEqual(artRow.data["ID INTERNO ARTICULO"], "475");
+assert.strictEqual(artRow.data["NOMBRE DE ARTICULO"], "CINTA");
+const cleared = Ops.clearArticle(artRow);
+assert.strictEqual(cleared.data["ID INTERNO ARTICULO"], "");
+assert.strictEqual(cleared.data["NOMBRE DE ARTICULO"], "");
+assert.strictEqual(cleared.selectedArticle, null);
+
+const dupResolved = Ops.duplicateRow([Ops.applyArticle(baseRow(1), article)], 0, 77);
+assert.strictEqual(dupResolved.newRow.data["ID INTERNO ARTICULO"], "21999");
+assert.strictEqual(dupResolved.newRow.selectedArticle.ref, "12948087");
+const copyArt = Ops.copyFieldFromPrevious(
+  [Ops.applyArticle(baseRow(1), article), baseRow(2)],
+  1,
+  Ops.ARTICLE_ID,
+);
+assert.ok(copyArt.ok);
+assert.strictEqual(copyArt.rows[1].data["ID INTERNO ARTICULO"], "21999");
+assert.strictEqual(copyArt.rows[1].data["NOMBRE DE ARTICULO"], "MOTOR X");
 
 console.log("OK purchase UX ops tests");

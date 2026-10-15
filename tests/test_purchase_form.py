@@ -151,6 +151,35 @@ class PurchaseFormTests(unittest.TestCase):
         for idx, header in enumerate(expected):
             self.assertEqual(parsed[1][idx], row[header], msg=f"mismatch at col {header}")
 
+    def test_fecha_formato_y_calendario(self):
+        contract = app.purchase_template_contract()
+        self.assertEqual(contract["date_fields"], ["FECHA DE AJUSTE"])
+        self.assertEqual(contract["date_format"], "DD/MM/AAAA")
+        self.assertEqual(app.PURCHASE_DATE_FIELDS, ["FECHA DE AJUSTE"])
+
+        self.assertTrue(app.is_valid_purchase_date("30/09/2026"))
+        self.assertTrue(app.is_valid_purchase_date("29/02/2024"))  # bisiesto
+        self.assertFalse(app.is_valid_purchase_date("29/02/2023"))
+        self.assertFalse(app.is_valid_purchase_date("31/04/2026"))
+        self.assertFalse(app.is_valid_purchase_date("00/01/2026"))
+        self.assertFalse(app.is_valid_purchase_date("15-10-2026"))
+        self.assertFalse(app.is_valid_purchase_date("2026-09-30"))
+        self.assertFalse(app.is_valid_purchase_date("32/01/2026"))
+
+        ok_data, _, ok_errors = app.export_purchase_csv([sample_row(**{"FECHA DE AJUSTE": "30/09/2026"})])
+        self.assertEqual(ok_errors, [])
+        parsed = list(csv.reader(io.StringIO(ok_data.decode("utf-8-sig")), delimiter=";"))
+        fecha_idx = app.PURCHASE_HEADERS.index("FECHA DE AJUSTE")
+        self.assertEqual(parsed[1][fecha_idx], "30/09/2026")
+        self.assertNotIn("2026-09-30", ok_data.decode("utf-8-sig"))
+
+        _bad, _fn, bad_errors = app.export_purchase_csv([sample_row(**{"FECHA DE AJUSTE": "31/02/2026"})])
+        self.assertTrue(any(e.get("field") == "FECHA DE AJUSTE" for e in bad_errors))
+        self.assertTrue(any("Fecha inválida" in e["message"] for e in bad_errors))
+
+        _bad2, _fn2, empty_errors = app.export_purchase_csv([sample_row(**{"FECHA DE AJUSTE": ""})])
+        self.assertTrue(any(e["field"] == "FECHA DE AJUSTE" for e in empty_errors))
+
     def test_08_special_chars_and_empty_optional(self):
         row = sample_row(
             **{
@@ -171,13 +200,98 @@ class PurchaseFormTests(unittest.TestCase):
             sample_row(**{"ID INTERNO ARTICULO": "999999", "NOMBRE DE ARTICULO": "X"}),
         ])
         self.assertTrue(errors)
-        self.assertTrue(any("no existe" in e["message"] for e in errors))
+        self.assertTrue(any(
+            "no existe" in e["message"] or "No hay coincidencia" in e["message"]
+            for e in errors
+        ))
 
     def test_09b_mismatched_name(self):
         _data, _filename, errors = app.export_purchase_csv([
             sample_row(**{"NOMBRE DE ARTICULO": "NOMBRE INCORRECTO"}),
         ])
         self.assertTrue(any("no corresponde" in e["message"] for e in errors))
+
+    def test_resolve_ref_id_ambiguous_and_nombre_opcional(self):
+        # 1-4: Ref → ID + nombre; ID directo; nombre vacío ok
+        resolved_ref = app.resolve_article_code("12948087")
+        self.assertEqual(resolved_ref["status"], "resolved")
+        self.assertEqual(resolved_ref["item"]["internal_id"], "21999")
+        self.assertEqual(resolved_ref["item"]["match"], "ref")
+
+        resolved_id = app.resolve_article_code("21999")
+        self.assertEqual(resolved_id["status"], "resolved")
+        self.assertEqual(resolved_id["item"]["internal_id"], "21999")
+
+        data, _, errors = app.export_purchase_csv([
+            sample_row(**{
+                "ID INTERNO ARTICULO": "12948087",
+                "NOMBRE DE ARTICULO": "",
+            }),
+        ])
+        self.assertEqual(errors, [])
+        parsed = list(csv.reader(io.StringIO(data.decode("utf-8-sig")), delimiter=";"))
+        id_idx = app.PURCHASE_HEADERS.index("ID INTERNO ARTICULO")
+        name_idx = app.PURCHASE_HEADERS.index("NOMBRE DE ARTICULO")
+        self.assertEqual(parsed[1][id_idx], "21999")
+        self.assertIn("MOTOR GENERATOR", parsed[1][name_idx])
+        self.assertNotIn("NOMBRE DE ARTICULO", app.PURCHASE_REQUIRED_FIELDS)
+        self.assertIn("NOMBRE DE ARTICULO", app.PURCHASE_OPTIONAL_FIELDS)
+
+        # 5: inexistente
+        missing = app.resolve_article_code("REF-INEXISTENTE")
+        self.assertEqual(missing["status"], "not_found")
+
+        # 6: ambigüedad — Ref de A e ID de B
+        catalog = app.load_persistent_catalog()
+        catalog["12948087"] = app.CatalogItem(
+            "12948087",
+            "ARTICULO CUYO ID ES LA REF DE OTRO",
+            "OTRA-REF-999",
+        )
+        with mock.patch.object(app, "load_persistent_catalog", return_value=catalog):
+            amb = app.resolve_article_code("12948087")
+        self.assertEqual(amb["status"], "ambiguous")
+        self.assertEqual(len(amb["candidates"]), 2)
+
+        # 7: cambio de artículo (exportar otra Ref)
+        data2, _, err2 = app.export_purchase_csv([
+            sample_row(**{
+                "ID INTERNO ARTICULO": "100002",
+                "NOMBRE DE ARTICULO": "",
+            }),
+        ])
+        self.assertEqual(err2, [])
+        parsed2 = list(csv.reader(io.StringIO(data2.decode("utf-8-sig")), delimiter=";"))
+        self.assertEqual(parsed2[1][id_idx], "475")
+
+        # 8: duplicación lógica — dos filas resueltas
+        rows = [
+            sample_row(**{"iDENTIFICAR": "A", "ID INTERNO ARTICULO": "12948087", "NOMBRE DE ARTICULO": ""}),
+            sample_row(**{"iDENTIFICAR": "A-COPY", "ID INTERNO ARTICULO": "12948087", "NOMBRE DE ARTICULO": ""}),
+        ]
+        data3, _, err3 = app.export_purchase_csv(rows)
+        self.assertEqual(err3, [])
+        parsed3 = list(csv.reader(io.StringIO(data3.decode("utf-8-sig")), delimiter=";"))
+        self.assertEqual(parsed3[1][id_idx], "21999")
+        self.assertEqual(parsed3[2][id_idx], "21999")
+
+        # 10: preview == export payload
+        preview = app.preview_purchase_rows([
+            sample_row(**{"ID INTERNO ARTICULO": "12948087", "NOMBRE DE ARTICULO": ""}),
+        ])
+        self.assertTrue(preview["ok"])
+        self.assertEqual(preview["headers"], app.PURCHASE_HEADERS)
+        export_data, _, export_errors = app.export_purchase_csv([
+            sample_row(**{"ID INTERNO ARTICULO": "12948087", "NOMBRE DE ARTICULO": ""}),
+        ])
+        self.assertEqual(export_errors, [])
+        export_rows = list(csv.reader(io.StringIO(export_data.decode("utf-8-sig")), delimiter=";"))
+        for idx, header in enumerate(preview["headers"]):
+            self.assertEqual(preview["rows"][0][header], export_rows[1][idx])
+
+        # 13: 14 columnas
+        self.assertEqual(len(preview["headers"]), 14)
+        self.assertEqual(preview["headers"][1], "iDENTIFICAR")
 
     def test_10_large_catalog_suggest(self):
         big = {str(i): app.CatalogItem(str(i), f"ARTICULO {i} REF-{i}", str(100000 + i)) for i in range(1, 20001)}

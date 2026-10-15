@@ -282,6 +282,39 @@ th { background: #f7f9fb; }
   background: #f5f7fa;
   color: #314357;
 }
+.cell-input.invalid {
+  border-color: #c45a5a;
+  background: #fff5f5;
+}
+.date-wrap {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 22px;
+  grid-template-rows: auto auto;
+  gap: 2px 4px;
+  align-items: center;
+  min-width: 0;
+}
+.date-wrap .date-input { grid-column: 1; grid-row: 1; }
+.date-wrap .date-picker {
+  grid-column: 2;
+  grid-row: 1;
+  width: 22px;
+  min-width: 22px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid #c5d0dc;
+  border-radius: 4px;
+  background: #fff;
+  cursor: pointer;
+}
+.date-wrap .cell-error {
+  grid-column: 1 / -1;
+  grid-row: 2;
+  color: #a42929;
+  font-size: 10px;
+  line-height: 1.2;
+  padding: 0 2px 2px;
+}
 .grid-cell.selected { background: #e7f0f8; }
 .grid-cell.active-cell { box-shadow: inset 0 0 0 2px #4d7eab; }
 
@@ -343,6 +376,58 @@ th { background: #f7f9fb; }
   text-overflow: ellipsis;
 }
 .suggest-empty { padding: 8px; color: #667386; font-size: 12px; }
+.suggest-item .match-tag {
+  display: inline-block;
+  margin-left: 6px;
+  font-size: 10px;
+  color: #4d7eab;
+  font-weight: 600;
+}
+
+.csv-preview {
+  margin: 12px 0 0;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #f8fafc;
+}
+.csv-preview.hidden { display: none; }
+.csv-preview summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--brand);
+  list-style: none;
+}
+.csv-preview summary::-webkit-details-marker { display: none; }
+.preview-scroll {
+  max-height: 280px;
+  overflow: auto;
+  margin-top: 8px;
+  background: #fff;
+  border-radius: 8px;
+  border: 1px solid #e3eaf1;
+}
+#csvPreviewTable {
+  width: max-content;
+  min-width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+#csvPreviewTable th,
+#csvPreviewTable td {
+  padding: 6px 8px;
+  border-bottom: 1px solid #eef2f6;
+  border-right: 1px solid #f3f6f9;
+  white-space: nowrap;
+  text-align: left;
+}
+#csvPreviewTable th {
+  background: #edf2f7;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  font-size: 11px;
+}
 
 .sr-only {
   position: absolute;
