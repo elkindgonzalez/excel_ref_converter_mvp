@@ -16,6 +16,14 @@ La UI ya no convierte archivos de compras cargados. El usuario crea el CSV desde
 
 La conversión legacy (`process_*` / `POST /api/process`) se mantiene para CLI y pruebas de regresión del catálogo, pero no se expone en la navegación.
 
+## Copia inteligente y tabla compacta
+
+La lógica pura de filas vive en `static/purchase_ops.js` (duplicar, copiar↑, rellenar↓, pegado TSV, anchos). Se prueba con Node sin DOM.
+
+**Por qué:** permite validar integridad de artículos y orden de exportación sin dependencias UI, y mantiene el navegador ligero (sin grids de terceros).
+
+Redimensionado de columnas solo en sesión: arrastre / doble clic / restablecer. Sin `localStorage` ni servidor.
+
 ## Contrato de plantilla
 
 Los encabezados, el delimitador `;`, UTF-8-BOM y CRLF se tomaron del archivo real `Alexis Compras pruebas.csv`. No se inventaron columnas.

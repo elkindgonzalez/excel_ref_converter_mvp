@@ -41,10 +41,13 @@ Doble clic en `iniciar_windows.bat` o:
 2. Busca artículos por Ref, ID interno o nombre (sugerencias desde el servidor; no se descarga el catálogo completo).
 3. Al seleccionar, se completan `ID INTERNO ARTICULO` (ID real) y `NOMBRE DE ARTICULO`.
 4. Completa el resto de campos de la plantilla.
-5. Agrega o elimina filas según necesites.
-6. Pulsa **Descargar CSV**.
+5. Usa **duplicar**, **copiar ↑** (desde fila anterior), **Rellenar ↓** / `Ctrl|⌘+D`, y pegado desde Excel.
+6. Redimensiona columnas arrastrando el borde del encabezado (doble clic = autoajuste).
+7. Pulsa **Descargar CSV**.
 
-Los datos del formulario viven solo en la sesión del navegador. El CSV generado se entrega con token temporal en memoria; no se guarda de forma permanente en disco.
+Los datos del formulario y los anchos de columna viven solo en la sesión del navegador. El CSV generado se entrega con token temporal en memoria; no se guarda de forma permanente en disco.
+
+Detalle UX: `docs/ux-diligenciamiento.md`.
 
 ### Plantilla CSV
 

@@ -11,7 +11,7 @@
     <section class="hero">
       <p class="eyebrow">Inventario</p>
       <h1>Compras y catálogo</h1>
-      <p class="lead">Diligencia el archivo de compras desde la interfaz y descarga el CSV listo para usar. La única carga de archivos es para actualizar el catálogo maestro.</p>
+      <p class="lead">Diligencia compras con copia inteligente y una tabla compacta. La única carga de archivos es para actualizar el catálogo.</p>
     </section>
 
     <nav class="tabs" role="tablist" aria-label="Funciones">
@@ -20,20 +20,26 @@
     </nav>
 
     <section id="panelCreate" class="panel">
-      <section class="card">
+      <section class="card card-flush">
         <div class="toolbar">
           <div>
             <h2>Archivo de compras</h2>
-            <p class="muted">Selecciona artículos del catálogo y completa los campos de la plantilla. Los datos viven solo en esta sesión.</p>
+            <p class="muted tip-line">
+              <kbd>⇥</kbd> navegar · <kbd>⌘/Ctrl</kbd>+<kbd>C</kbd>/<kbd>V</kbd> copiar/pegar ·
+              <kbd>⌘/Ctrl</kbd>+<kbd>D</kbd> rellenar ↓ · duplicar/copiar↑ en la fila
+            </p>
           </div>
           <div class="toolbar-actions">
             <button id="addRowButton" class="button secondary" type="button">Agregar fila</button>
+            <button id="fillDownButton" class="button secondary" type="button" title="Rellenar hacia abajo desde la celda activa">Rellenar ↓</button>
+            <button id="resetWidthsButton" class="button secondary" type="button" title="Restablecer anchos de columnas">Restablecer anchos</button>
             <button id="downloadButton" class="button primary" type="button">Descargar CSV</button>
           </div>
         </div>
 
         <div class="table-scroll" id="purchaseScroll">
           <table class="purchase-table" id="purchaseTable">
+            <colgroup id="purchaseCols"></colgroup>
             <thead id="purchaseHead"></thead>
             <tbody id="purchaseBody"></tbody>
           </table>
@@ -164,8 +170,9 @@
       </section>
     </section>
 
-    <p class="privacy">El procesamiento se ejecuta en este equipo. No se guardan borradores ni archivos generados de forma permanente.</p>
+    <p class="privacy">Sin borradores ni historial. Los anchos de columna se conservan solo en esta sesión.</p>
   </main>
+  <script src="/purchase_ops.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>
